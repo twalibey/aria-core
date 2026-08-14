@@ -27,6 +27,8 @@ export class AnthropicProvider implements LLMProvider {
     const response: any = await this.client.messages.create({
       model: this.model,
       max_tokens: this.maxTokens,
+      // Sonnet 5+ runs adaptive thinking by default when `thinking` is omitted, and max_tokens caps thinking+response as one shared budget; disabling it keeps maxTokens meaning "budget for the visible response," as it did when this code was designed and tested against Sonnet 4.
+      thinking: { type: 'disabled' },
       system: params.systemPrompt,
       messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
       // ToolDefinition.parameters is a generic JSON Schema object; Anthropic's InputSchema type is stricter than we can statically prove here, though any real JSON Schema object satisfies it at runtime.
