@@ -1,4 +1,4 @@
-import type { AriaHistoryStore, RateLimitResult, SubscriptionTier } from './types';
+import type { AriaHistoryStore, RateLimitResult, SubscriptionTier } from './types.js';
 
 export interface RateLimiterConfig {
   freeLimit: number;

@@ -6,8 +6,10 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "pretest": "npm run build --workspace=packages/core",
     "test": "vitest run",
-    "typecheck": "tsc -b --noEmit"
+    "pretypecheck": "npm run build --workspace=packages/core",
+    "typecheck": "tsc -b --noEmit && vitest --typecheck.only --run"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
