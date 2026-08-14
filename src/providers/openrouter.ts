@@ -38,7 +38,8 @@ export class OpenRouterProvider implements LLMProvider {
         function: {
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          // ToolDefinition.parameters is a generic JSON Schema object; OpenAI's FunctionParameters type is stricter than we can statically prove here, though any real JSON Schema object satisfies it at runtime.
+          parameters: t.parameters as Record<string, unknown>,
         },
       })),
     });
