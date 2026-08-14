@@ -54,6 +54,19 @@ describe('AnthropicProvider', () => {
     );
   });
 
+  it('explicitly disables extended thinking so maxTokens covers only the response', async () => {
+    mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
+
+    const provider = new AnthropicProvider({ apiKey: 'test-key' });
+    await provider.call({ systemPrompt: 'sys', messages: [] });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinking: { type: 'disabled' },
+      })
+    );
+  });
+
   it('translates tool definitions to input_schema shape', async () => {
     mockCreate.mockResolvedValueOnce({ content: [{ type: 'text', text: 'ok' }] });
 
