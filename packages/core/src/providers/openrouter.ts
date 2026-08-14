@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import type { LLMProvider, LLMMessage, ToolDefinition, LLMResponse } from '../types';
+import type { LLMProvider, LLMMessage, ToolDefinition, LLMResponse } from '../types.js';
 
 export interface OpenRouterProviderConfig {
   apiKey: string;
@@ -17,7 +17,8 @@ export class OpenRouterProvider implements LLMProvider {
       baseURL: 'https://openrouter.ai/api/v1',
       apiKey: config.apiKey,
     });
-    this.model = config.model ?? 'anthropic/claude-sonnet-4';
+    // Maintenance item: model IDs get deprecated and retired on a schedule, so this default needs periodic review (the previous `anthropic/claude-sonnet-4` default was retired 2026-06-15).
+    this.model = config.model ?? 'anthropic/claude-sonnet-5';
     this.maxTokens = config.maxTokens ?? 1024;
   }
 

@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { LLMProvider, LLMMessage, ToolDefinition, LLMResponse } from '../types';
+import type { LLMProvider, LLMMessage, ToolDefinition, LLMResponse } from '../types.js';
 
 export interface AnthropicProviderConfig {
   apiKey: string;
@@ -14,7 +14,8 @@ export class AnthropicProvider implements LLMProvider {
 
   constructor(config: AnthropicProviderConfig) {
     this.client = new Anthropic({ apiKey: config.apiKey });
-    this.model = config.model ?? 'claude-sonnet-4-20250514';
+    // Maintenance item: model IDs get deprecated and retired on a schedule, so this default needs periodic review (the previous `claude-sonnet-4-20250514` default was retired 2026-06-15).
+    this.model = config.model ?? 'claude-sonnet-5';
     this.maxTokens = config.maxTokens ?? 1024;
   }
 
