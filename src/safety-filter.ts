@@ -1,9 +1,9 @@
 import type { SafetyCheckResult } from './types';
 
 const CRISIS_PATTERNS: RegExp[] = [
-  /\b(kill myself|suicid\w*|end my life|want to die|self[- ]harm|hurt(?:ing)? myself)\b/i,
+  /\b(kill(?:ing)? myself|suicid\w*|end(?:ing)? my life|want to die|self[- ]harm\w*|hurt(?:ing)? myself)\b/i,
   /\b(chest pain|can'?t breathe|cannot breathe|severe bleeding|heart attack|stroke)\b/i,
-  /\b(overdose|poisoned|poisoning)\b/i,
+  /\b(overdos\w*|poisoned|poisoning)\b/i,
 ];
 
 const DEFAULT_SAFETY_RESPONSE =
