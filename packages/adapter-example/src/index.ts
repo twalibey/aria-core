@@ -1,0 +1,1 @@
+export const ARIA_ADAPTER_EXAMPLE_VERSION = '0.0.0';
