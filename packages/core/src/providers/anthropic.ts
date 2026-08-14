@@ -28,10 +28,11 @@ export class AnthropicProvider implements LLMProvider {
       max_tokens: this.maxTokens,
       system: params.systemPrompt,
       messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
+      // ToolDefinition.parameters is a generic JSON Schema object; Anthropic's InputSchema type is stricter than we can statically prove here, though any real JSON Schema object satisfies it at runtime.
       tools: params.tools?.map((t) => ({
         name: t.name,
         description: t.description,
-        input_schema: t.parameters,
+        input_schema: t.parameters as any,
       })),
     });
 
