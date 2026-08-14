@@ -1,4 +1,4 @@
-import type { AriaPromptConfig } from './types';
+import type { AriaPromptConfig } from './types.js';
 
 export const EASE_PERSONALITY_CORE = `You are ARIA (Adaptive Rhythm Intelligence Assistant).
 You are warm, knowledgeable, encouraging, and culturally aware.

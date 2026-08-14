@@ -1,5 +1,5 @@
 import Ajv, { type ValidateFunction } from 'ajv';
-import type { Tool, ToolDefinition, ToolExecutionResult } from './types';
+import type { Tool, ToolDefinition, ToolExecutionResult } from './types.js';
 
 const ajv = new Ajv();
 

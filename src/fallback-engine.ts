@@ -1,4 +1,4 @@
-import type { FallbackTopic } from './types';
+import type { FallbackTopic } from './types.js';
 
 export class FallbackEngine {
   constructor(
