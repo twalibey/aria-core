@@ -1,4 +1,4 @@
-import type { AriaHistoryStore, AriaMessage } from '../types';
+import type { AriaHistoryStore, AriaMessage } from '../types.js';
 
 let idCounter = 0;
 
@@ -7,7 +7,9 @@ export class InMemoryHistoryStore implements AriaHistoryStore {
 
   async getRecentMessages(userId: string, limit: number): Promise<AriaMessage[]> {
     const all = this.messages.get(userId) ?? [];
-    return all.slice(-limit);
+    // Guard against limit <= 0: `slice(-0)` is `slice(0)`, which would return
+    // the ENTIRE history when the caller asked for none.
+    return limit <= 0 ? [] : all.slice(-limit);
   }
 
   async saveMessage(

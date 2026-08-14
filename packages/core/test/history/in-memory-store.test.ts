@@ -23,6 +23,14 @@ describe('InMemoryHistoryStore', () => {
     expect(messages.map((m) => m.content)).toEqual(['msg3', 'msg4']);
   });
 
+  it('returns an empty array for limit 0 (guards against slice(-0))', async () => {
+    for (let i = 0; i < 3; i++) {
+      await store.saveMessage('u1', { role: 'user', content: `msg${i}` });
+    }
+    expect(await store.getRecentMessages('u1', 0)).toEqual([]);
+    expect(await store.getRecentMessages('u1', -5)).toEqual([]);
+  });
+
   it('keeps different users isolated', async () => {
     await store.saveMessage('u1', { role: 'user', content: 'from u1' });
     await store.saveMessage('u2', { role: 'user', content: 'from u2' });

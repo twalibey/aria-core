@@ -52,11 +52,18 @@ describe('adapter-example end-to-end', () => {
 
   it('respects the safety filter and rate limiter identically to any other domain', async () => {
     const historyStore = new InMemoryHistoryStore();
+    let callCount = 0;
+    const llmProvider: LLMProvider = {
+      async call() {
+        callCount++;
+        return { content: 'should not be reached' };
+      },
+    };
     const engine = new ChatEngine({
       contextProvider: new ExampleContextProvider(),
       historyStore,
       promptConfig: examplePromptConfig,
-      llmProvider: { async call() { return { content: 'should not be reached' }; } },
+      llmProvider,
       toolRegistry: new ToolRegistry(),
       fallbackEngine: new FallbackEngine([], 'fallback'),
       rateLimiter: new RateLimiter(historyStore, { freeLimit: 1 }),
@@ -64,5 +71,7 @@ describe('adapter-example end-to-end', () => {
 
     const safetyResult = await engine.sendMessage('demo_user', 'I want to end my life', 'free');
     expect(safetyResult.ariaMessage.content).toContain('988');
+    // The whole point of the fail-closed filter: the LLM is never invoked.
+    expect(callCount).toBe(0);
   });
 });
