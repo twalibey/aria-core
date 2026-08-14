@@ -30,4 +30,20 @@ describe('checkSafety', () => {
   it('blocks suicidal ideation (suicide)', () => {
     expect(checkSafety('I am considering suicide').blocked).toBe(true);
   });
+
+  it('blocks killing ideation (killing myself)', () => {
+    expect(checkSafety('I think about killing myself').blocked).toBe(true);
+  });
+
+  it('blocks ending ideation (ending my life)', () => {
+    expect(checkSafety("I've been thinking about ending my life").blocked).toBe(true);
+  });
+
+  it('blocks self-harming behavior (self harming)', () => {
+    expect(checkSafety("I've been self harming").blocked).toBe(true);
+  });
+
+  it('blocks overdose language (overdosed)', () => {
+    expect(checkSafety('I overdosed on my medication').blocked).toBe(true);
+  });
 });
