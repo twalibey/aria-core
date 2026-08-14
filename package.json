@@ -15,5 +15,8 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }
