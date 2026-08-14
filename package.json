@@ -17,6 +17,7 @@
     "build": "tsup src/index.ts --format esm,cjs --dts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "ajv": "^8.20.0",
     "openai": "^6.49.0"
   }
