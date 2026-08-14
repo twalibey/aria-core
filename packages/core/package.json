@@ -14,11 +14,14 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts"
+    "build": "tsup && tsc --emitDeclarationOnly"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
     "ajv": "^8.20.0",
     "openai": "^6.49.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }

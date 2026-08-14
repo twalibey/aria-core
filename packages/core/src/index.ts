@@ -1,1 +1,15 @@
-export const ARIA_CORE_VERSION = '0.1.0';
+export * from './types';
+export { EASE_PERSONALITY_CORE, buildSystemPrompt } from './personality';
+export { InMemoryHistoryStore } from './history/in-memory-store';
+export { RateLimiter, getStartOfDayInTimezone } from './rate-limiter';
+export type { RateLimiterConfig } from './rate-limiter';
+export { checkSafety } from './safety-filter';
+export { FallbackEngine } from './fallback-engine';
+export { ToolRegistry } from './tools';
+export type { ToolErrorHook } from './tools';
+export { OpenRouterProvider } from './providers/openrouter';
+export type { OpenRouterProviderConfig } from './providers/openrouter';
+export { AnthropicProvider } from './providers/anthropic';
+export type { AnthropicProviderConfig } from './providers/anthropic';
+export { ChatEngine, RateLimitExceededError } from './chat-engine';
+export type { ChatEngineDeps, SendMessageResult } from './chat-engine';
