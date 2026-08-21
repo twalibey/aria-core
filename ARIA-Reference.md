@@ -193,7 +193,7 @@ interface AriaUserContext {
 
   health: {
     fitness_level: string;       // "beginner" | "intermediate" | "advanced"
-    conditions: string[];        // e.g. ["diabetes", "arthritis"]
+    conditions: string[];        // Adaptive-Training condition-entry IDs, e.g. ["adaptive-rotator-cuff", "adaptive-type-2-diabetes"] — see Exercise Modification & Safety System
     limitations: string[];       // e.g. ["lower back", "right knee"]
     allergies: string[];         // e.g. ["peanuts", "shellfish"]
     medications: string[];       // e.g. ["metformin"]
@@ -768,7 +768,7 @@ This is what Hard Rule 2 actually depends on, and earlier versions of this doc n
 - `buildModificationPromptSection()` renders the matched rows into a `## REVIEWED EXERCISE MODIFICATIONS` prompt block with an explicit instruction: **"use ONLY the reviewed guidance provided. Do not invent your own contraindication reasoning for these conditions."** This is the literal source of the "use ONLY that guidance" clause now folded into Hard Rule 2 above.
 - If a disclosed condition has zero matching rows, the section still includes a generic fallback line for that condition ("no reviewed guidance on file... do not name a specific exercise... give only a generic gentler-variation suggestion and tell them to check with a doctor or physical therapist") rather than silently omitting it.
 
-### ⚠️ Known Issue — needs verification, not resolved by this doc
+### Condition-ID format — verified, not a bug
 
 `buildModificationPromptSection()` filters `conditionIds` through:
 
@@ -776,9 +776,7 @@ This is what Hard Rule 2 actually depends on, and earlier versions of this doc n
 const VALID_CONDITION_ID = /^adaptive-[a-z0-9-]+$/;
 ```
 
-Only condition IDs matching that pattern (e.g. something like `adaptive-lower-back-pain`) are considered for lookup at all — anything not matching is silently dropped before the modification table is even consulted. Meanwhile, this same document's `AriaUserContext.health.conditions` type is documented above (and elsewhere in the app) as plain human-readable strings like `"diabetes"` or `"arthritis"`, not `adaptive-`-prefixed IDs. **If the values actually stored in `health_profiles.conditions` are plain strings rather than `adaptive-`-prefixed IDs, this regex filter would silently strip every one of them, and `buildModificationPromptSection()` would return an empty string for every user** — meaning the entire reviewed-guidance mechanism this section describes could be a no-op in production, with Rule 2 quietly falling back to the LLM's own (unreviewed) contraindication reasoning despite the prompt's confident-sounding instruction not to.
-
-This was **not resolved** as part of this rewrite. It requires someone to actually check `aria-context.ts`'s query and any normalization applied to `health_profiles.conditions` — and, more directly, what values are actually written into that column by the onboarding/health-profile UI — before this doc's description of the modification system can be treated as verified end-to-end rather than "verified as written, unverified as to whether it ever actually matches anything." Flag this to whoever owns the health-profile data model next.
+Only condition IDs matching that pattern (e.g. `adaptive-rotator-cuff`, `adaptive-acl`) are considered for lookup — anything not matching is silently dropped before the modification table is even consulted. An earlier revision of this doc flagged this as a possible bug, on the assumption that `health.conditions` might actually be plain strings like `"diabetes"`. That's been traced and ruled out: both `onboarding/index.tsx` and `health-profile.tsx` populate `health_profiles.conditions` exclusively through `EncyclopediaSelect(type="condition")`, which is hard-filtered (`client/src/data/wellness-encyclopedia.ts`'s `getDropdownOptions()`) to entries in the "Adaptive Training" category — and every entry in that category has an `adaptive-`-prefixed `id`, which is exactly what gets written on selection. So real stored values genuinely are `adaptive-*` slugs, matching this regex by design; the mechanism works correctly in production. This document's own type illustration (`health.conditions: string[]`, e.g. `["diabetes", "arthritis"]`) was the actual source of the confusion — treat it as shorthand for "an array of Adaptive-Training condition-entry IDs," not literal plain-English condition names.
 
 ---
 
@@ -1587,12 +1585,10 @@ ARIA is still entirely reactive — she only responds when a user opens the chat
 
 `invalidateAriaContext()` is real and correctly bumps `profiles.aria_data_version`, but is only called after `log_water` / `log_mood` tool calls. No other data-writing route (workout logging, meal logging, sleep logging, health-profile updates, XP gain, daily-action completion) calls it — those all still depend on the 1-hour TTL alone. See [Layer 1: Context Engine](#layer-1-context-engine) for the full detail.
 
-### Two flagged-not-resolved items carried from earlier sections
+### One item resolved, one still flagged-not-resolved
 
-These are restated here so they aren't missed by a reader skimming only this section — both need someone with the relevant context to actually verify or decide, not just be noted:
-
-- **Exercise modification condition-ID matching** ([full detail](#exercise-modification--safety-system)): `buildModificationPromptSection()`'s condition-ID filter requires values matching `/^adaptive-[a-z0-9-]+$/`, while `health.conditions` is documented throughout this doc as plain strings (`"diabetes"`, `"arthritis"`). If the real stored values are plain strings, the entire reviewed-guidance mechanism behind Hard Rule 2 could be silently returning nothing for every user. Needs someone to check the actual `health_profiles.conditions` data and any normalization in `aria-context.ts`.
-- **Sport phase fallback default** ([full detail](#sport-periodization)): `getPeriodizationModifiers()` silently falls back to `'transition'` for any unrecognized `SportPhase`. The API route guards against this today via `VALID_PHASES` validation, but the fallback itself was never a deliberate, documented design decision — anyone calling the periodization functions outside that validated route would hit it unknowingly.
+- **Exercise modification condition-ID matching** ([full detail](#exercise-modification--safety-system)): previously flagged here as a possible bug. **Resolved (2026-08-21), verified against the actual write path**: `onboarding/index.tsx` and `health-profile.tsx` both populate `health_profiles.conditions` exclusively through `EncyclopediaSelect(type="condition")`, hard-filtered to the "Adaptive Training" category, whose entries all carry `adaptive-`-prefixed `id`s that get written on selection. Real stored values are genuinely `adaptive-*` slugs, matching `VALID_CONDITION_ID` by design — the mechanism behind Hard Rule 2 works correctly in production. This document's own plain-string illustration (`"diabetes"`, `"arthritis"`) was the actual bug, not the code — corrected above.
+- **Sport phase fallback default** ([full detail](#sport-periodization)) — still open: `getPeriodizationModifiers()` silently falls back to `'transition'` for any unrecognized `SportPhase`. The API route guards against this today via `VALID_PHASES` validation, but the fallback itself was never a deliberate, documented design decision — anyone calling the periodization functions outside that validated route would hit it unknowingly.
 
 ### Open design question carried from earlier section
 
