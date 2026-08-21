@@ -2,6 +2,8 @@
 
 ## Developer Reference & Integration Guide
 
+> **Last verified against source:** 2026-08-14. This revision was checked line-by-line against the real My Body fitness app source (`server/src/utils/aria-*.ts`, `server/src/routes/aria-chat.ts`, `server/src/routes/plan-generate.ts`, `client/src/pages/aria/chat.tsx`, `client/src/components/aria-briefing.tsx`, `server/src/utils/exercise-modifications.ts`, `server/src/utils/periodization.ts`) after two independent audits found the prior version was written from memory/description rather than the shipped code. Earlier drafts of this doc understated the real system significantly — most of what was listed below as an "Improvements Roadmap" was already built. Treat this revision as grounded in code; treat anything you read in an *older* copy of this doc as unverified.
+
 ---
 
 ## Table of Contents
@@ -12,16 +14,24 @@
 4. [Layer 1: Context Engine](#layer-1-context-engine)
 5. [Layer 2: System Prompt Builder](#layer-2-system-prompt-builder)
 6. [Layer 3: Chat Router (API)](#layer-3-chat-router-api)
-7. [Layer 4: Frontend Components](#layer-4-frontend-components)
-8. [Database Schema](#database-schema)
-9. [LLM Integration](#llm-integration)
-10. [Fallback Engine](#fallback-engine)
-11. [Rate Limiting & Monetization](#rate-limiting--monetization)
-12. [Plan Generation (Structured Output Mode)](#plan-generation-structured-output-mode)
-13. [Making ARIA Cross-Project](#making-aria-cross-project)
-14. [Integration Checklist for a New App](#integration-checklist-for-a-new-app)
-15. [File Map](#file-map)
-16. [Improvements Roadmap](#improvements-roadmap)
+7. [Tool Use / Function Calling](#tool-use--function-calling)
+8. [Topic Guardrails](#topic-guardrails)
+9. [Sentiment Detection](#sentiment-detection)
+10. [Long-Term Memory](#long-term-memory)
+11. [Exercise Modification & Safety System](#exercise-modification--safety-system)
+12. [Layer 4: Frontend Components](#layer-4-frontend-components)
+13. [Database Schema](#database-schema)
+14. [LLM Integration](#llm-integration)
+15. [Fallback Engine](#fallback-engine)
+16. [Rate Limiting & Monetization](#rate-limiting--monetization)
+17. [Plan Generation (Structured Output Mode)](#plan-generation-structured-output-mode)
+18. [Sport Periodization](#sport-periodization)
+19. [Weekly Wellness Plan System](#weekly-wellness-plan-system)
+20. [Making ARIA Cross-Project](#making-aria-cross-project)
+21. [Integration Checklist for a New App](#integration-checklist-for-a-new-app)
+22. [File Map](#file-map)
+23. [Remaining Gaps & Open Items](#remaining-gaps--open-items)
+24. [Summary](#summary)
 
 ---
 
@@ -36,9 +46,11 @@ What makes ARIA different from "just calling an API":
 | Sends user message to LLM | Sends user message + full user context + personality rules + conversation history to LLM |
 | Gets generic response | Gets response that references user's actual data (sleep scores, streak, conditions) |
 | Fails if API is down | Falls back to rule-based responses — never leaves the user hanging |
-| No access control | Built-in rate limiting with free/premium tiers |
-| Stateless | Maintains persistent chat history and cached user context |
-| No guardrails | Hard rules: no medical advice, respect health conditions, respect dietary choices |
+| No access control | Built-in rate limiting with free/premium tiers, timezone-aware |
+| Stateless, forgets everything | Maintains persistent chat history (20-message window) plus a separate long-term memory store that survives across sessions |
+| Can only talk | Can call tools to look up real data and log water/mood on the user's behalf |
+| No topic boundaries | Pre-LLM guardrail filter redirects clearly off-topic requests before they reach the model |
+| No guardrails | Hard rules: no medical advice, respect health conditions (deferring to a reviewed modification table), respect dietary choices |
 
 ---
 
@@ -63,7 +75,7 @@ ARIA operates under four principles, defined in her system prompt and enforced a
 
 - Speaks like a supportive coach who genuinely cares — not clinical, not robotic
 - Uses the user's name naturally
-- Adapts tone to the user's current state (stressed -> calming, energized -> match energy)
+- Adapts tone to the user's current state (stressed -> calming, energized -> match energy) — as of the sentiment detection system, this is now backed by an explicit pre-LLM signal rather than pure model inference (see [Sentiment Detection](#sentiment-detection))
 - Celebrates every win — even small ones
 - Normalizes struggles — everyone has hard days
 - Honest but kind — doesn't sugarcoat, but isn't harsh
@@ -74,7 +86,7 @@ ARIA operates under four principles, defined in her system prompt and enforced a
 
 ## Architecture Overview
 
-ARIA is built as four decoupled layers. Each can be extracted, modified, or replaced independently.
+ARIA is built as four decoupled layers, plus a set of supporting utility modules that plug into Layers 2 and 3 (tool use, guardrails, sentiment, memory, exercise modifications). Each can be extracted, modified, or replaced independently.
 
 ```
 +------------------------------------------------------------------+
@@ -85,11 +97,12 @@ ARIA is built as four decoupled layers. Each can be extracted, modified, or repl
 |  |   (Dashboard Widget)      |  |    (Full Chat Interface)    |  |
 |  |                           |  |                             |  |
 |  |  - Rule-based generation  |  |  - Message history          |  |
-|  |  - No API call needed     |  |  - Real-time chat           |  |
-|  |  - Sleep/workout/meal     |  |  - Typing indicator         |  |
-|  |    insights               |  |  - Rate limit banner        |  |
-|  |  - Streak tracking        |  |  - Demo mode fallback       |  |
-|  |  - Goal references        |  |  - Markdown rendering       |  |
+|  |  - No API call needed     |  |  - Streaming (SSE) by default|  |
+|  |  - Sleep/workout/meal     |  |  - Typing indicator          |  |
+|  |    insights               |  |  - Rate limit banner         |  |
+|  |  - Streak tracking        |  |  - Thumbs up/down feedback   |  |
+|  |  - Goal references        |  |  - Image upload (vision)     |  |
+|  |                           |  |  - Demo mode fallback        |  |
 |  +---------------------------+  +-----------------------------+  |
 |                                          |                       |
 +------------------------------------------|-----------------------+
@@ -99,12 +112,7 @@ ARIA is built as four decoupled layers. Each can be extracted, modified, or repl
 |                                           v                      |
 |  +----------------------------------------------------------+   |
 |  |              Layer 3: Chat Router (aria-chat.ts)          |   |
-|  |                                                          |   |
-|  |  GET  /api/aria/messages        Paginated chat history   |   |
-|  |  GET  /api/aria/remaining       Rate limit check         |   |
-|  |  POST /api/aria/message         Send + receive response  |   |
-|  |  POST /api/aria/refresh-context Force context rebuild    |   |
-|  |  DELETE /api/aria/messages      Clear history            |   |
+|  |                              8 endpoints (see below)      |   |
 |  +----+------------------------------------------+----------+   |
 |       |                                          |               |
 |       v                                          v               |
@@ -112,11 +120,11 @@ ARIA is built as four decoupled layers. Each can be extracted, modified, or repl
 |  | Layer 1: Context Engine |  | Layer 2: System Prompt       |   |
 |  | (aria-context.ts)       |  | Builder                      |   |
 |  |                         |  | (aria-system-prompt.ts)      |   |
-|  | - 17+ parallel queries  |  |                              |   |
+|  | - 19 parallel queries   |  |                              |   |
 |  | - AriaUserContext type  |  | - buildAriaSystemPrompt()    |   |
 |  | - 1-hour cache (JSONB)  |  | - buildPlanGenerationPrompt()|   |
-|  | - Level naming system   |  | - Personality + rules        |   |
-|  +------------+------------+  | - User data injection        |   |
+|  | - Level naming system   |  | - Personality + rules         |   |
+|  +------------+------------+  | - User data injection         |   |
 |               |               +------------------------------+   |
 |               v                                                  |
 |  +----------------------------------------------------------+   |
@@ -124,15 +132,22 @@ ARIA is built as four decoupled layers. Each can be extracted, modified, or repl
 |  |                                                          |   |
 |  |  aria_messages   - Chat history with RLS                 |   |
 |  |  aria_context    - Cached user context (JSONB)           |   |
-|  |  profiles        - User profile data                     |   |
+|  |  aria_memory      - Long-term conversation memories       |   |
+|  |  aria_feedback    - Thumbs up/down on ARIA responses      |   |
+|  |  exercise_modifications - Curated, human-reviewed         |   |
+|  |                     exercise safety guidance               |   |
+|  |  weekly_wellness_plans - 7-day Move/Eat/Rest/Mind plans   |   |
+|  |  profiles         - User profile data                    |   |
 |  |  health_profiles - Conditions, limitations, allergies    |   |
 |  |  assessments     - Goals, schedule, preferences          |   |
 |  |  workout_logs    - Exercise history                      |   |
 |  |  nutrition_logs  - Meal tracking                         |   |
+|  |  hydration_logs  - Water intake (written by the log_water|   |
+|  |                     tool, separate from nutrition_logs)   |   |
 |  |  sleep_logs      - Sleep data                            |   |
 |  |  mood_logs       - Mood/energy/stress                    |   |
 |  |  gamification    - XP, level, badges, streaks            |   |
-|  |  + 8 more tables...                                      |   |
+|  |  + more tables...                                         |   |
 |  +----------------------------------------------------------+   |
 +------------------------------------------------------------------+
                                |
@@ -144,11 +159,22 @@ ARIA is built as four decoupled layers. Each can be extracted, modified, or repl
                     +---------------------+
 ```
 
+**Supporting utility modules** wired into Layers 2 and 3, not shown in the box diagram above:
+
+| Module | File | Role |
+|---|---|---|
+| Tool definitions & executor | `server/src/utils/aria-tools.ts` | 8 tools the LLM can call mid-conversation (log water/mood, query stats/trends/history) |
+| Topic guardrails | `server/src/utils/aria-guardrails.ts` | Pre-LLM off-topic filter (7 categories) |
+| Sentiment detection | `server/src/utils/aria-sentiment.ts` | Pre-LLM mood/energy/intent classifier, injected into the system prompt |
+| Long-term memory | `server/src/utils/aria-memory.ts` | Fire-and-forget conversation summarization into persistent memories |
+| Exercise modifications | `server/src/utils/exercise-modifications.ts` | Curated, human-reviewed condition-specific exercise safety guidance |
+| Sport periodization | `server/src/utils/periodization.ts` | 6-phase training-emphasis modifiers for plan generation |
+
 ---
 
 ## Layer 1: Context Engine
 
-**File:** `server/src/utils/aria-context.ts`
+**File:** `server/src/utils/aria-context.ts` (449 lines)
 
 This is ARIA's memory — the mechanism that makes her responses personal rather than generic. A single async function `buildAriaContext(userId)` gathers everything the app knows about a user into one typed object.
 
@@ -183,6 +209,11 @@ interface AriaUserContext {
     body_comp_goal: string | null;
     injury_history: unknown[];
     meal_frequency: number | null;
+    modifications: ExerciseModificationRow[]; // Reviewed exercise safety
+                                                // guidance matched to this
+                                                // user's disclosed conditions
+                                                // — see Exercise Modification
+                                                // & Safety System below
   };
 
   selections: {
@@ -228,10 +259,21 @@ interface AriaUserContext {
   };
 
   plan: {
-    has_active_plan: boolean;
+    has_active_plan: boolean;   // 4-week AI-generated plan (thirty_day_plans)
     current_week: number;       // 1-4
     tasks_completed: number;
     total_tasks: number;
+  };
+
+  weeklyPlan: {                 // The separate 7-day Weekly Wellness Plan
+                                 // system — see Weekly Wellness Plan System
+    has_weekly_plan: boolean;
+    today_theme: string | null;
+    today_workout: string | null;
+    today_is_rest_day: boolean;
+    completed_today_count: number;
+    total_today_items: number;
+    weekly_completion_pct: number;
   };
 
   dailyActions: {
@@ -241,10 +283,12 @@ interface AriaUserContext {
 }
 ```
 
+Two fields were missing from earlier versions of this doc: `health.modifications` (populated from the exercise-modifications table, filtered to the user's disclosed conditions) and the entire `weeklyPlan` object (populated from the active row in `weekly_wellness_plans`, with today's items and weekly completion percentage computed in-process — see the `weeklyPlan` IIFE in `aria-context.ts`).
+
 ### How Context Building Works
 
-1. **17+ database queries run in parallel** via `Promise.all()` for speed
-2. Each query fetches one slice of user data (profile, health, last workout, weekly stats, etc.)
+1. **19 database queries run in parallel** via `Promise.all()` for speed — profile, health profile, wellness selections, assessment, last workout/meal/sleep/mood/stretch/recovery, this-week workout count, this-week sleep, this-week mood, today's nutrition, gamification, 4-week plan weeks, daily actions, the active weekly wellness plan, and the entire `exercise_modifications` table (fetched whole and filtered in memory, since it's a small curated table).
+2. Each query fetches one slice of user data
 3. Results are normalized into the `AriaUserContext` shape with sensible defaults for missing data
 4. The assembled context is **cached** in the `aria_context` table as JSONB
 5. `getAriaContext()` checks cache age — if < 1 hour old, returns cached; otherwise rebuilds
@@ -269,8 +313,9 @@ ARIA's gamification uses named levels rather than raw numbers:
 
 ### Key Design Decisions
 
-- **Parallel queries:** All 17+ queries run simultaneously. This is critical — running them sequentially would mean ~2-3 seconds of latency; parallel runs complete in ~200-400ms.
+- **Parallel queries:** All 19 queries run simultaneously. This is critical — running them sequentially would mean ~2-3 seconds of latency; parallel runs complete in ~200-400ms.
 - **Caching with TTL:** Rebuilding context on every message would be wasteful. The 1-hour TTL balances freshness with performance.
+- **Invalidation exists but is only partially wired.** `invalidateAriaContext(userId)` is a real, working function — it deletes the cached `aria_context` row and bumps `profiles.aria_data_version` so staleness is at least detectable. It is called from exactly one place today: the tool executor in `aria-chat.ts` calls it after a successful `log_water` or `log_mood` tool call (see [Tool Use / Function Calling](#tool-use--function-calling)). It is **not** called from any of the app's other data-writing routes (workout logging, meal logging, sleep logging, profile updates, etc.), so those still rely on the 1-hour TTL alone. This is a partial rollout of event-driven invalidation, not a fully missing feature and not a fully shipped one — treat it as "wired for two tool-triggered writes, TTL-only everywhere else."
 - **Graceful defaults:** Every field has a fallback value. If a user hasn't completed onboarding, ARIA still works — she just has less data to reference.
 - **JSONB storage:** The cached context is stored as JSONB, not normalized tables. This makes reads fast and avoids complex joins for a cache.
 
@@ -278,11 +323,23 @@ ARIA's gamification uses named levels rather than raw numbers:
 
 ## Layer 2: System Prompt Builder
 
-**File:** `server/src/utils/aria-system-prompt.ts`
+**File:** `server/src/utils/aria-system-prompt.ts` (265 lines)
 
-This is ARIA's personality and instruction set. A pure function that takes an `AriaUserContext` and returns a string that becomes the LLM's system prompt.
+This is ARIA's personality and instruction set. `buildAriaSystemPrompt()` takes an `AriaUserContext` plus an optional `SystemPromptOptions` bag and returns a string that becomes the LLM's system prompt.
 
-### buildAriaSystemPrompt(context)
+### SystemPromptOptions
+
+```typescript
+interface SystemPromptOptions {
+  memories?: AriaMemory[];        // Long-term memories (see Long-Term Memory)
+  sentiment?: SentimentHint;      // Detected from the current message (see Sentiment Detection)
+  visionEnabled?: boolean;        // Whether this call includes an image
+}
+```
+
+All three are optional — the prompt works with just the context, but gets more capable with each additional signal supplied by the router.
+
+### buildAriaSystemPrompt(context, options)
 
 The prompt is structured into these sections:
 
@@ -313,7 +370,11 @@ What ARIA is qualified to discuss:
 - Breathwork (box breathing, Wim Hof, physiological sigh, nasal breathing)
 - Sport periodization (off-season through competition phases)
 
-#### 4. User Data Injection
+#### 4. "Your Capabilities" — Tool Awareness
+
+A section that earlier versions of this doc did not document at all: the prompt explicitly tells the model it can look up weekly stats, sleep trends, workout history, nutrition, mood trends, and personal records, and can log water and mood on the user's behalf — and instructs it to use those tools instead of guessing or telling the user to do something manually. See [Tool Use / Function Calling](#tool-use--function-calling).
+
+#### 5. User Data Injection
 Real user data is interpolated directly into the prompt:
 
 ```
@@ -321,12 +382,14 @@ Real user data is interpolated directly into the prompt:
 - Name: ${profile.name}
 - Member since: ${new Date(profile.member_since).toLocaleDateString()}
 - Subscription: ${profile.subscription_tier}
+- Timezone: ${profile.timezone}
 
 ### Health
 - Fitness Level: ${health.fitness_level}
 - Conditions: ${health.conditions.join(', ')}
 - Limitations: ${health.limitations.join(', ')}
 ...
+[REVIEWED EXERCISE MODIFICATIONS section, if any conditions match — see below]
 
 ### Recent Activity
 - Last Workout: "${recentActivity.lastWorkout.title}" on ... (RPE: .../10)
@@ -336,14 +399,21 @@ Real user data is interpolated directly into the prompt:
 ### Progress
 - Level: ... (...) — ... XP
 - Current Streak: ... days
+- Plan: Week X/4, or "No active plan"
+- Weekly Plan: XX% complete | Today: ... (see Weekly Wellness Plan System)
+
+[WHAT YOU REMEMBER FROM PAST CONVERSATIONS section, if any memories exist]
+[IMAGE ANALYSIS section, if visionEnabled]
 ```
 
 This is what enables responses like "Your sleep score was 62 last night — let's look at why" rather than generic "try to sleep more."
 
-#### 5. Behavioral Rules (12 Hard Rules)
+#### 6. Behavioral Rules (14 Hard Rules)
+
+The real prompt has **14** rules, not 12. Two tool-use-related rules were missing from earlier versions of this doc (13 and 14 below), and Rule 2's real text includes an explicit instruction to defer to the reviewed exercise-modification guidance rather than reasoning independently:
 
 1. NEVER give specific medical advice — redirect to doctor
-2. ALWAYS respect health conditions — never recommend contraindicated exercises
+2. ALWAYS respect health conditions — never recommend contraindicated exercises. **When exercise modification guidance is present for a condition, use ONLY that guidance — do not reason about contraindications yourself for a condition the guidance covers.**
 3. ALWAYS respect diet framework — never suggest violating foods
 4. Reference actual data when relevant
 5. If no recent data, gently encourage logging
@@ -354,6 +424,10 @@ This is what enables responses like "Your sleep score was 62 last night — let'
 10. Match formality to user's message
 11. Can reference wellness encyclopedia topics by name
 12. Never break character
+13. **When you use tools to look up data, weave the results naturally into your response — don't just dump raw numbers.**
+14. **If a tool call fails, gracefully continue with the information you already have from the context above.**
+
+A `sentimentSection` (see [Sentiment Detection](#sentiment-detection)) is appended after the rules when a sentiment hint is supplied.
 
 ### buildPlanGenerationPrompt(context, planType)
 
@@ -364,6 +438,8 @@ A second prompt builder for structured JSON output. Same context, different inst
 - Each workout has specific exercises, sets, reps, rest periods
 - Includes adaptive notes for health conditions
 - Respects diet framework, fitness level, schedule constraints
+- Also includes the same REVIEWED EXERCISE MODIFICATIONS section as the chat prompt, with the same "use ONLY that guidance" instruction
+- When the caller (`plan-generate.ts`) passes a `sport_phase`, an additional periodization context block is appended after this prompt — see [Sport Periodization](#sport-periodization)
 
 **Plan types:** `full_program`, `workout`, `nutrition`, `recovery`, `mental_wellness`
 
@@ -371,10 +447,10 @@ A second prompt builder for structured JSON output. Same context, different inst
 
 ## Layer 3: Chat Router (API)
 
-**File:** `server/src/routes/aria-chat.ts`
+**File:** `server/src/routes/aria-chat.ts` (767 lines)
 **Mount point:** `/api/aria`
 
-All routes require authentication via `verifyToken` middleware.
+All routes require authentication via `verifyToken` middleware. The router has **8 endpoints**, not 5 — three were missing from earlier versions of this doc (`POST /message/stream`, `POST /feedback`, `GET /memories`).
 
 ### Endpoints
 
@@ -430,42 +506,58 @@ Quick check without loading messages.
 
 #### `POST /api/aria/message` — Send Message & Get Response
 
-The core endpoint. This is the full flow:
+The core endpoint. The real flow is considerably deeper than a plain "call the LLM and save the response" — it wires together rate limiting, guardrails, tool use, sentiment, and memory:
 
 ```
 User message
     |
     v
-[1] Rate limit check (free=3/day, premium=unlimited)
+[1] Rate limit check — timezone-aware (getUserMidnight), free=3/day, premium=unlimited
     |
     v
-[2] Save user message to aria_messages
+[2] Topic guardrail check (checkTopicRelevance) — if blocked, save both messages
+    |   with the canned redirect and return immediately; NO LLM call is made
     |
     v
-[3] Load last 20 messages as conversation history
+[3] Save user message to aria_messages
     |
     v
-[4] Get or build user context (cached 1hr)
+[4] Load last 20 messages as conversation history
     |
     v
-[5] Build system prompt with injected context
+[5] In parallel: get/build user context (cached 1hr) + load long-term memories
     |
     v
-[6] Call LLM (OpenRouter -> Claude)
+[6] Detect sentiment from the current message (detectSentiment)
+    |
+    v
+[7] Build system prompt with injected context + memories + sentiment + vision flag
+    |
+    v
+[8] First LLM call, WITH tool definitions (ARIA_TOOLS) attached
+    |   |
+    |   +-- If the model returns tool_calls: execute each tool server-side,
+    |   |   invalidate the context cache if it was log_water/log_mood,
+    |   |   then make a SECOND LLM call with the tool results appended
     |   |
     |   +-- On failure: use fallback response generator
     |
     v
-[7] Save ARIA response to aria_messages
+[9] Fire-and-forget: trigger summarizeConversation() in the background
+    |   (not awaited — the HTTP response does not wait on this)
     |
     v
-[8] Return both messages + rate limit status
+[10] Save ARIA response to aria_messages
+    |
+    v
+[11] Return both messages + rate limit status
 ```
 
 **Request:**
 ```json
 {
-  "content": "What should I eat before my workout tomorrow?"
+  "content": "What should I eat before my workout tomorrow?",
+  "image": "optional base64 string or data: URL"
 }
 ```
 
@@ -494,6 +586,23 @@ User message
   "limit": 3
 }
 ```
+
+#### `POST /api/aria/message/stream` — Streaming Response (SSE)
+
+Server-Sent Events variant of the endpoint above. Same rate-limit and guardrail checks up front; if the model is unavailable it simulates streaming by chunking the fallback response word-by-word. Sends `{ type: 'chunk', content }` events as tokens arrive and a final `{ type: 'done', message_id, rate_limit }` event once the full response is saved. Memory summarization is triggered the same way as the non-streaming endpoint (fire-and-forget). Note: this endpoint accepts only `content`, not `image` — image/vision input goes through the standard `/message` endpoint.
+
+#### `POST /api/aria/feedback` — Rate an ARIA Response
+
+Records a thumbs up/down (and optional free-text feedback) on a specific ARIA message. Validates that the message belongs to the requesting user and has `role: 'aria'` before accepting the rating. Upserts on `(user_id, message_id)` so a user can change their mind.
+
+**Request:**
+```json
+{ "message_id": "uuid", "rating": 1, "feedback": "optional text" }
+```
+
+#### `GET /api/aria/memories` — View Long-Term Memories
+
+Returns the user's stored long-term memories (see [Long-Term Memory](#long-term-memory)).
 
 #### `POST /api/aria/refresh-context` — Force Context Rebuild
 
@@ -541,21 +650,156 @@ messages: [
 
 ---
 
+## Tool Use / Function Calling
+
+**File:** `server/src/utils/aria-tools.ts` (312 lines)
+
+Earlier versions of this doc listed function calling as unbuilt future work (with a proposed tool set of `log_workout`, `log_water`, `get_weekly_stats`, `get_sleep_trend`, `suggest_workout`, `set_reminder`). It is fully implemented, and the real tool set differs from that proposal — `log_workout`, `suggest_workout`, and `set_reminder` don't exist; they'd be reasonable future additions, but should not be presented as current.
+
+### The 8 real tools (`ARIA_TOOLS`)
+
+| Tool | Type | What it does |
+|---|---|---|
+| `log_water` | write | Logs water intake to **`hydration_logs`** (not `nutrition_logs`) |
+| `log_mood` | write | Logs mood/energy/stress ratings (1-5 each) plus an optional note to `mood_logs` |
+| `get_weekly_stats` | read | Workouts this week, avg sleep, avg mood, calories today |
+| `get_sleep_trend` | read | Sleep entries for the past N days (default 7, max 30) |
+| `get_workout_history` | read | Workout entries for the past N days (default 7, max 30) |
+| `get_nutrition_today` | read | Today's logged meals + totals |
+| `get_mood_trend` | read | Mood/energy/stress entries for the past N days |
+| `get_personal_records` | read | PRs, optionally filtered by exercise name |
+
+Tools are passed to the first LLM call as `tools: ARIA_TOOLS` (OpenAI function-calling format). If the model returns `tool_calls`, `aria-chat.ts` executes each one via `executeAriaTool(userId, toolName, args)`, then makes a **second** LLM call with the tool results appended so the model can weave them into a natural-language reply (Rule 13 above).
+
+### Cache invalidation on write tools
+
+After executing a tool call, the router checks:
+
+```typescript
+if (['log_water', 'log_mood'].includes(toolCall.function.name)) {
+  invalidateAriaContext(userId).catch(() => {});
+}
+```
+
+This is the one place `invalidateAriaContext()` is actually called from outside the context engine itself — see the "partially wired" note in [Layer 1](#layer-1-context-engine).
+
+---
+
+## Topic Guardrails
+
+**File:** `server/src/utils/aria-guardrails.ts` (68 lines)
+
+Also previously documented as unbuilt. It's real, and runs as a pre-LLM filter in both `/message` and `/message/stream` — a blocked message never reaches the LLM at all (saves tokens, guarantees consistent behavior).
+
+### 7 categories, not 5
+
+Earlier versions of this doc listed 5 off-topic categories. The real `OFF_TOPIC_PATTERNS` list has **7**: finance, programming, politics, harmful, creative writing, **academics**, and **legal** (the last two were missing).
+
+### Real precedence rules
+
+`checkTopicRelevance(message)` applies three checks, in this order, and the order matters:
+
+1. **Messages under 15 characters are always allowed.** Short greetings and follow-ups never get blocked, regardless of content.
+2. **Wellness-keyword override.** If the message matches a broad wellness-related pattern (workout, nutrition, sleep, stress, mood, etc.) it is allowed through **even if it also matches an off-topic pattern.** This is checked before the off-topic patterns, not after — e.g. "how does stress affect my workout performance" would otherwise risk no match, but a message mentioning both "stock" and "workout" is let through because of this override, not despite it.
+3. **Only then** are the 7 off-topic patterns checked. A match returns `{ allowed: false, redirect_message }` with a topic-specific canned response (or a generic fallback if the topic key isn't found).
+
+Anything that doesn't hit an off-topic pattern is allowed through to the LLM.
+
+---
+
+## Sentiment Detection
+
+**File:** `server/src/utils/aria-sentiment.ts` (91 lines)
+
+Also real, not a roadmap item. `detectSentiment(message)` runs before every LLM call and produces a `SentimentHint`:
+
+```typescript
+interface SentimentHint {
+  mood: 'positive' | 'neutral' | 'negative' | 'distressed';
+  energy: 'high' | 'medium' | 'low';
+  intent: 'question' | 'venting' | 'celebration' | 'request' | 'greeting' | 'unknown';
+}
+```
+
+Detection order: distress patterns are checked first and short-circuit to `{ mood: 'distressed', energy: 'low', intent: 'venting' }` if matched. Otherwise mood is derived from counting positive vs. negative keyword matches, energy from high/low-energy keyword patterns, and intent from a set of heuristics (question marks and question words, negative-without-a-question-mark as venting, positive keywords as celebration, action verbs as request, greeting patterns as greeting).
+
+### It materially changes what the LLM is told to do, not just its tone label
+
+`buildSentimentHint()` appends a `## CURRENT MESSAGE CONTEXT` block to the system prompt, and the content of that block is conditional on the detected state — this is instruction, not just labeling:
+
+- `mood: 'distressed'` → "Be extra gentle, validate their feelings, and suggest professional support if appropriate. Do NOT jump to workout suggestions."
+- `mood: 'negative'` → "Be empathetic and validating before offering advice."
+- `intent: 'celebration'` → "Match their excitement! Celebrate with them."
+- `intent: 'venting'` → "Listen first. Don't jump to solutions unless asked."
+- `energy: 'low'` → "Keep suggestions low-effort and manageable. Don't overwhelm with big plans."
+
+---
+
+## Long-Term Memory
+
+**File:** `server/src/utils/aria-memory.ts` (166 lines)
+
+Also real. Earlier versions of this doc proposed a cron-based summarization job; the real implementation is **fire-and-forget after every message send**, not cron-based, and has its own internal gating so it doesn't run (or write) on every call.
+
+### How it actually runs
+
+- `summarizeConversation(userId, openrouterClient)` is called from `aria-chat.ts` after the ARIA response is generated, as `summarizeConversation(userId, client).catch(err => ...)` — **not awaited**. The HTTP response to the user is not delayed by summarization.
+- Internally it gates on volume: it loads up to the last 30 messages, bails if fewer than 10 exist, and — if a memory already exists — also checks how many messages have arrived since the most recent memory's `created_at` and bails unless that's **≥ 10**. So summarization only actually fires roughly once per 10 new messages, even though it's invoked on every send.
+- When it does run, it calls the LLM with **`model: 'anthropic/claude-haiku-4-5-20251001'`** and **`max_tokens: 500`** — a smaller/cheaper model than the main chat model, asking it to extract `goal` / `concern` / `user_preference` / `conversation_summary` items as JSON.
+- **Deduplication:** before inserting, it fetches the user's existing memory contents and skips any extracted memory whose content exactly matches (case-insensitively) an existing one.
+- Each accepted memory is inserted individually into `aria_memory`.
+
+### How memories come back into the prompt
+
+`getAriaMemories(userId)` fetches up to 20 memories ordered by `source_date` descending, and `buildMemoryPromptSection()` renders them into a `## WHAT YOU REMEMBER FROM PAST CONVERSATIONS` block appended to the system prompt, with an instruction to reference them naturally and ask the user if an old memory seems outdated rather than assuming it's still true.
+
+---
+
+## Exercise Modification & Safety System
+
+**File:** `server/src/utils/exercise-modifications.ts` (94 lines)
+
+This is what Hard Rule 2 actually depends on, and earlier versions of this doc never explained the mechanism at all — Rule 2 just said "never recommend contraindicated exercises" with no description of how ARIA is supposed to know what's contraindicated.
+
+### The real mechanism
+
+- `exercise_modifications` is a **curated, human-reviewed** database table. Each row (`ExerciseModificationRow`) has a `condition_id`, a `movement_category`, a **severity** taxonomy value (`'avoid' | 'modify' | 'caution'`), a `gentler_variation` suggestion, a `doctor_pt_note`, and reviewer metadata (`reviewed_by`, `reviewed_at`, optional `source`).
+- The whole table is fetched once per context build (it's small — tens of rows) and filtered in memory: `getModificationsForConditions(conditionIds, allModifications)` returns only the rows matching the user's disclosed `health.conditions`.
+- `buildModificationPromptSection()` renders the matched rows into a `## REVIEWED EXERCISE MODIFICATIONS` prompt block with an explicit instruction: **"use ONLY the reviewed guidance provided. Do not invent your own contraindication reasoning for these conditions."** This is the literal source of the "use ONLY that guidance" clause now folded into Hard Rule 2 above.
+- If a disclosed condition has zero matching rows, the section still includes a generic fallback line for that condition ("no reviewed guidance on file... do not name a specific exercise... give only a generic gentler-variation suggestion and tell them to check with a doctor or physical therapist") rather than silently omitting it.
+
+### ⚠️ Known Issue — needs verification, not resolved by this doc
+
+`buildModificationPromptSection()` filters `conditionIds` through:
+
+```typescript
+const VALID_CONDITION_ID = /^adaptive-[a-z0-9-]+$/;
+```
+
+Only condition IDs matching that pattern (e.g. something like `adaptive-lower-back-pain`) are considered for lookup at all — anything not matching is silently dropped before the modification table is even consulted. Meanwhile, this same document's `AriaUserContext.health.conditions` type is documented above (and elsewhere in the app) as plain human-readable strings like `"diabetes"` or `"arthritis"`, not `adaptive-`-prefixed IDs. **If the values actually stored in `health_profiles.conditions` are plain strings rather than `adaptive-`-prefixed IDs, this regex filter would silently strip every one of them, and `buildModificationPromptSection()` would return an empty string for every user** — meaning the entire reviewed-guidance mechanism this section describes could be a no-op in production, with Rule 2 quietly falling back to the LLM's own (unreviewed) contraindication reasoning despite the prompt's confident-sounding instruction not to.
+
+This was **not resolved** as part of this rewrite. It requires someone to actually check `aria-context.ts`'s query and any normalization applied to `health_profiles.conditions` — and, more directly, what values are actually written into that column by the onboarding/health-profile UI — before this doc's description of the modification system can be treated as verified end-to-end rather than "verified as written, unverified as to whether it ever actually matches anything." Flag this to whoever owns the health-profile data model next.
+
+---
+
 ## Layer 4: Frontend Components
 
-### AriaChatPage (`client/src/pages/aria/chat.tsx`)
+### AriaChatPage (`client/src/pages/aria/chat.tsx`, 849 lines)
 
 Full-screen chat interface at route `/aria`.
 
 **Features:**
 - **Dual mode:** API mode (authenticated) or Demo mode (localStorage-based, no API needed)
+- **Streaming by default:** `useStreaming` is `true`; the page consumes the `/message/stream` SSE endpoint and falls back to standard JSON handling if the response isn't `text/event-stream` (e.g. an off-topic redirect or a 429)
 - **Message rendering:** Custom markdown renderer (bold text, bullet lists, paragraphs)
-- **Typing indicator:** Animated bouncing dots with "ARIA is thinking" label
+- **Typing indicator:** Animated bouncing dots with "ARIA is thinking" label, hidden once streaming text starts arriving
+- **Feedback:** Thumbs up/down buttons under every ARIA message, posting to `POST /api/aria/feedback`
+- **Image upload:** An image-attach button lets the user send an image (base64, ≤5MB, validated client-side) alongside their message; sent via the standard (non-streaming) `/message` endpoint
 - **Rate limit banner:** Shows remaining messages for free users, with "Go Premium" CTA
 - **Rate limit lockout:** When limit is hit, input is replaced with upgrade prompt
 - **Time-aware welcome:** "Good morning/afternoon/evening, {name}!" with personality
-- **Chat controls:** Clear history, back navigation
-- **Keyboard:** Enter to send, Shift+Enter preserved for newline
+- **Chat controls:** Clear history (with a confirm dialog), back navigation
+- **Keyboard:** Enter to send. The input is a single-line `<input type="text">`, not a `<textarea>` — there is no way to insert a literal newline, so "Shift+Enter for newline" does not apply here even though the keydown handler checks `!e.shiftKey`; Shift+Enter simply does nothing rather than inserting a line break.
 - **Auto-scroll:** Scrolls to bottom on new messages
 
 **Component Architecture:**
@@ -564,10 +808,12 @@ AriaChatPage
 ├── Header (back button, ARIA avatar, "AI Powered" badge, clear button)
 ├── Rate Limit Banner (conditional)
 ├── Messages Area (scrollable)
-│   ├── ChatMessage (user) — coral bubble, right-aligned
+│   ├── ChatMessage (user) — coral bubble, right-aligned, optional image preview
 │   ├── ChatMessage (aria) — sandy bubble, left-aligned, markdown rendered
+│   ├── Feedback buttons (aria messages) — thumbs up/down
 │   └── Typing Indicator (conditional)
 └── Input Area
+    ├── Image attach button + pending-image preview strip
     ├── Text Input (or rate limit lockout)
     └── Send Button
 ```
@@ -576,13 +822,13 @@ AriaChatPage
 
 When Supabase isn't configured (`isDemoMode`), ARIA runs entirely client-side:
 - Messages stored in `localStorage` under key `mybody_aria_chat`
-- Responses generated by `getDemoAriaResponse()` — keyword-based matching
-- Simulated typing delay (800-2000ms random)
+- Responses generated by `getDemoAriaResponse()` — keyword-based matching, covering **8 topics** (greetings, workout, nutrition, sleep, stress, motivation, pain, thank-you) — narrower than the backend fallback's 11 topics (see [Fallback Engine](#fallback-engine))
+- Simulated "thinking" pause of **400-800ms** before the response begins streaming in word-by-word (not 800-2000ms — that range was never in the code)
 - No rate limiting
 
-### AriaBriefing (`client/src/components/aria-briefing.tsx`)
+### AriaBriefing (`client/src/components/aria-briefing.tsx`, 292 lines)
 
-Dashboard widget that shows a daily snapshot. Runs **entirely on rule-based logic** — no LLM API call.
+Dashboard widget that shows a daily snapshot. Runs **entirely on rule-based logic** — no LLM API call. This section was confirmed accurate by both audit passes and is left as-is.
 
 **Data sources (direct Supabase queries):**
 - Recent workouts (last 30)
@@ -660,6 +906,17 @@ CREATE POLICY "Users can view own context"
   ON aria_context FOR SELECT USING (auth.uid() = user_id);
 ```
 
+### Additional tables now in active use
+
+The migration files for these were not part of the ground-truth source set for this revision, so exact column types/constraints below are reconstructed from what the code actually reads and writes, not copied from a migration — treat column presence as verified, exact SQL types as best-effort:
+
+- **`aria_memory`** — written by `aria-memory.ts`. Columns actually used: `user_id`, `memory_type` (`'conversation_summary' | 'user_preference' | 'goal' | 'concern'`), `content`, `source_date`, `created_at`.
+- **`aria_feedback`** — written by the `/feedback` endpoint. Columns actually used: `user_id`, `message_id`, `rating` (`1 | -1`), `feedback` (nullable text), upserted on `(user_id, message_id)`.
+- **`exercise_modifications`** — see [Exercise Modification & Safety System](#exercise-modification--safety-system) for its real shape (`id`, `condition_id`, `movement_category`, `severity`, `gentler_variation`, `doctor_pt_note`, `source`, `reviewed_by`, `reviewed_at`).
+- **`hydration_logs`** — the real write target for the `log_water` tool (columns used: `user_id`, `cups`, `logged_at`). Note this is a separate table from `nutrition_logs`.
+- **`weekly_wellness_plans`**, **`ai_generated_plans`** — see [Weekly Wellness Plan System](#weekly-wellness-plan-system) and [Plan Generation](#plan-generation-structured-output-mode).
+- **`personal_records`** — read by the `get_personal_records` tool (columns used: `exercise_name`, `record_type`, `value`, `unit`, `achieved_at`).
+
 ---
 
 ## LLM Integration
@@ -678,6 +935,7 @@ const client = new OpenAI({
 const response = await client.chat.completions.create({
   model: process.env.ARIA_MODEL || 'anthropic/claude-sonnet-4',
   max_tokens: parseInt(process.env.ARIA_MAX_TOKENS || '1024'),
+  tools: ARIA_TOOLS,
   messages: [
     { role: 'system', content: systemPrompt },
     ...conversationHistory,
@@ -687,14 +945,24 @@ const response = await client.chat.completions.create({
 
 ### Environment Variables
 
+Chat and plan generation use **separate** model/token env vars — this was missing from earlier versions of this doc, which documented only the chat pair.
+
 ```bash
 # Required for AI-powered responses
 OPENROUTER_API_KEY=your_openrouter_api_key
 
-# Optional (defaults shown)
+# Chat (aria-chat.ts) — optional, defaults shown
 ARIA_MODEL=anthropic/claude-sonnet-4
 ARIA_MAX_TOKENS=1024
+
+# Plan generation (plan-generate.ts) — optional, defaults shown.
+# Separate from the chat pair above, and defaults to a much larger
+# token budget since it's producing full structured JSON plans.
+PLAN_MODEL=anthropic/claude-sonnet-4
+PLAN_MAX_TOKENS=4096
 ```
+
+The long-term memory summarizer (`aria-memory.ts`) does not use either of these — it hardcodes `model: 'anthropic/claude-haiku-4-5-20251001'` and `max_tokens: 500` directly in the call, not via an env var.
 
 ### Why OpenRouter Instead of Direct API
 
@@ -720,6 +988,8 @@ const response = await client.messages.create({
 });
 ```
 
+Note: the tool-calling and streaming code paths documented above are written against OpenAI's function-calling and SSE chunk shapes; a direct-Anthropic port would need to adapt both to Anthropic's native tool-use and streaming event formats, not just swap the client.
+
 ---
 
 ## Fallback Engine
@@ -729,7 +999,7 @@ Both the backend and frontend include keyword-based fallback response generators
 - The LLM API call fails
 - The app is running in demo mode
 
-### How It Works
+### How It Works (backend, `aria-chat.ts`)
 
 ```typescript
 function generateFallbackResponse(userMessage: string): string {
@@ -752,7 +1022,7 @@ function generateFallbackResponse(userMessage: string): string {
 }
 ```
 
-### Topics Covered
+### Topics Covered (backend — this table was confirmed accurate and is unchanged)
 
 | Topic | Keywords Matched |
 |---|---|
@@ -768,6 +1038,8 @@ function generateFallbackResponse(userMessage: string): string {
 | Body Comp | weight, lose, gain, fat, lean |
 | Gratitude | thank, thanks, appreciate |
 
+The frontend's demo-mode fallback (`getDemoAriaResponse()` in `chat.tsx`) is a separate, narrower implementation covering only 8 of these 11 topics — see [Layer 4](#layer-4-frontend-components).
+
 Each response is 2-4 paragraphs with bullet-point advice, uses ARIA's tone, and includes a follow-up question to keep the conversation going.
 
 ### Why This Matters
@@ -778,6 +1050,8 @@ ARIA **never fails silently**. Even without an API key or internet connection, u
 - Demo environments
 - Onboarding new developers who haven't set up API keys yet
 
+Note the topic guardrail filter (see [Topic Guardrails](#topic-guardrails)) runs *before* this fallback logic and before the LLM call, not as part of it — an off-topic message never reaches either the fallback engine or the LLM.
+
 ---
 
 ## Rate Limiting & Monetization
@@ -785,11 +1059,37 @@ ARIA **never fails silently**. Even without an API key or internet connection, u
 ### How Rate Limiting Works
 
 ```
-Free users:    3 messages per calendar day (resets at midnight)
+Free users:    3 messages per calendar day (resets at midnight, in the user's own timezone)
 Premium users: Unlimited messages
 ```
 
-Rate limiting is checked by counting user-role messages in `aria_messages` where `created_at >= start of today`.
+Earlier versions of this doc described this as using server time (UTC) for the daily reset — that was never actually accurate to a shipped version; the real implementation is timezone-aware via `getUserMidnight(timezone)` in `aria-chat.ts`:
+
+```typescript
+function getUserMidnight(timezone: string): Date {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const parts = formatter.formatToParts(now);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+
+  const midnightLocal = new Date(`${year}-${month}-${day}T00:00:00`);
+  const midnightUTC = new Date(midnightLocal.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const midnightInTZ = new Date(midnightLocal.toLocaleString('en-US', { timeZone: timezone }));
+  const offset = midnightUTC.getTime() - midnightInTZ.getTime();
+
+  return new Date(midnightLocal.getTime() + offset);
+  // Falls back to server midnight (new Date().setHours(0,0,0,0)) if the
+  // timezone string is invalid / the Intl call throws.
+}
+```
+
+`checkRateLimit()` fetches `profiles.subscription_tier` and `profiles.timezone` in the same query (no extra round-trip), defaults timezone to `'America/New_York'` if unset, computes `todayStart` via `getUserMidnight()`, and counts `aria_messages` where `role = 'user'` and `created_at >= todayStart`.
+
+Rate limiting is checked by counting user-role messages in `aria_messages` where `created_at >= start of today` (in the user's timezone).
 
 The rate limit status is returned with every API response so the frontend can display remaining count and upgrade prompts proactively.
 
@@ -799,7 +1099,7 @@ The rate limit status is returned with every API response so the frontend can di
 User sends message
     |
     v
-Count today's messages for this user
+Count today's messages for this user (timezone-aware "today")
     |
     v
 Is user premium?
@@ -814,23 +1114,43 @@ The frontend handles 429 by:
 2. Replacing the input area with an "Upgrade" button
 3. Disabling the text input
 
+Plan generation has its own, separate monthly monetization rule — see [Plan Generation](#plan-generation-structured-output-mode).
+
 ---
 
 ## Plan Generation (Structured Output Mode)
 
-**File:** `server/src/routes/plan-generate.ts`
+**File:** `server/src/routes/plan-generate.ts` (910 lines)
 
-ARIA's context engine powers a second use case: generating structured 4-week wellness plans as JSON.
+`plan-generate.ts` is actually **two product surfaces sharing one file**: the 4-week `POST /api/plan/generate` AI plan documented here, and an entirely separate 7-day Weekly Wellness Plan system with its own endpoints — see [Weekly Wellness Plan System](#weekly-wellness-plan-system) below. Earlier versions of this doc only covered the first one.
 
-### How It Differs from Chat
+### How the 4-Week Plan Differs from Chat
 
 | Chat Mode | Plan Generation Mode |
 |---|---|
 | Free-form text output | Strict JSON output |
-| `buildAriaSystemPrompt()` | `buildPlanGenerationPrompt()` |
+| `buildAriaSystemPrompt()` | `buildPlanGenerationPrompt()`, optionally with periodization context appended |
 | Conversational, warm | Structured, data-dense |
 | 2-4 paragraphs | Multi-week plan with exercises, meals, sleep tips, tasks |
 | Uses conversation history | Single-shot generation |
+| `ARIA_MODEL` / `ARIA_MAX_TOKENS` (default 1024) | `PLAN_MODEL` / `PLAN_MAX_TOKENS` (default 4096) |
+
+### `POST /api/plan/generate` request parameters
+
+```json
+{
+  "plan_type": "full_program",
+  "title": "optional custom title",
+  "sport_phase": "optional — one of the 6 SportPhase values, see Sport Periodization",
+  "regen_context": {}
+}
+```
+
+`plan_type` must be one of `full_program`, `workout`, `nutrition`, `recovery`, `mental_wellness`. `sport_phase` was undocumented in earlier versions of this doc — it's optional, validated against `VALID_PHASES`, and when present appends a periodization context block to the prompt (see [Sport Periodization](#sport-periodization)).
+
+### Free-tier monthly rate limit (undocumented monetization rule)
+
+Free-tier users are capped at **1 AI-generated 4-week plan per calendar month**, counted from `ai_generated_plans` rows where `generated_at >= start of this month` (server month boundary, not timezone-aware like chat's rate limiter). A free user who has already generated a plan this month gets a 429 with `"Free accounts can generate 1 AI plan per month. Upgrade to Premium for unlimited plans."` This limit did not exist anywhere in earlier versions of this doc.
 
 ### Plan JSON Structure
 
@@ -886,15 +1206,105 @@ ARIA's context engine powers a second use case: generating structured 4-week wel
 }
 ```
 
+If the model call fails or no API key is configured, `generateFallbackPlan()` produces a rule-based 4-week plan keyed off fitness level (beginner/intermediate/advanced), days/week, and goals — same shape as the AI output, less personalized.
+
 ### Key Constraints in Plan Generation
 
-- Respects ALL health conditions — never includes contraindicated exercises
+- Respects ALL health conditions — never includes contraindicated exercises; defers to the reviewed exercise-modification guidance where it exists (see [Exercise Modification & Safety System](#exercise-modification--safety-system))
 - Uses preferred training styles when possible
 - Matches fitness level (beginner/intermediate/advanced)
 - Fits user's schedule (days per week, minutes per session)
 - Progressive difficulty (Week 1 easiest, Week 4 hardest)
 - Honors diet framework (halal, keto, plant-based, etc.)
 - Personalizes sleep tips to user's wake/bed times
+
+---
+
+## Sport Periodization
+
+**File:** `server/src/utils/periodization.ts` (143 lines)
+
+Not documented at all in earlier versions of this doc. This is a real, standalone subsystem (referencing standard periodization models — Bompa, Issurin, per the file's own comment) that adjusts plan generation based on where the user is in a competitive training cycle.
+
+### 6 phases, each with volume/intensity multipliers and 4 emphasis dimensions
+
+```typescript
+type SportPhase =
+  | 'off_season' | 'pre_season' | 'in_season'
+  | 'post_season' | 'competition' | 'transition';
+```
+
+Each phase has a `volumeMultiplier` and `intensityMultiplier` (both roughly 0.5-1.5x), plus four 0-1 emphasis dimensions — `strengthEmphasis`, `conditioningEmphasis`, `skillEmphasis`, `recoveryEmphasis` — along with a `nutritionFocus` string and free-text `trainingNotes`. For example, `in_season` drops volume to 0.7x and pushes intensity to 1.2x, shifts emphasis heavily toward skill (0.9) and recovery (0.8) and away from strength (0.4), with training notes explicitly warning against introducing new exercises mid-season. `competition` (taper week) drops volume to 0.5x, pushes skill and recovery emphasis to 1.0, and reprioritizes nutrition toward carb-loading and hydration.
+
+### How it's triggered
+
+`plan-generate.ts`'s `POST /api/plan/generate` accepts an optional `sport_phase` body param (validated against `VALID_PHASES`). When present, `buildPeriodizationContext(sport, phase)` appends a `## SPORT PERIODIZATION CONTEXT` block to the plan prompt, rendering the phase's multipliers, emphasis percentages, nutrition focus, and training notes, with an instruction that the plan's volume/intensity/exercise selection should reflect them.
+
+### ⚠️ Undocumented default — flagged, not resolved
+
+```typescript
+export function getPeriodizationModifiers(phase: SportPhase): PeriodizationModifiers {
+  const config = PHASE_CONFIGS[phase] || PHASE_CONFIGS.transition;
+  return { phase, ...config };
+}
+```
+
+Any phase value that isn't recognized silently falls back to `PHASE_CONFIGS.transition`. In practice this specific fallback is hard to hit from the API, since `plan-generate.ts` validates `sport_phase` against `VALID_PHASES` before ever calling into this function and rejects invalid values with a 400 — but `getPeriodizationModifiers()` and `buildPeriodizationContext()` are exported and usable independently of that validation, and nothing in the code or in any prior version of this doc documents `transition` as the intended default phase for an unspecified or unrecognized value. This is an undocumented decision baked into the code, not a deliberately chosen default — flag it for whoever next extends this subsystem (e.g. adds a caller that doesn't route through the validated endpoint) rather than treating "it falls back to transition" as settled, reviewed behavior.
+
+---
+
+## Weekly Wellness Plan System
+
+**File:** `server/src/routes/plan-generate.ts` (same file as the 4-week plan system, different endpoints)
+
+Entirely undocumented in earlier versions of this doc. This is a **second, separate product surface** from the 4-week AI plan — a rolling 7-day plan across four pillars (**Move / Eat / Rest / Mind**), with its own generator, its own fallback engine, and its own storage table (`weekly_wellness_plans`). Don't conflate it with the 4-week `ai_generated_plans` / `thirty_day_plans` system documented above — they're generated by different prompts, stored in different tables, and surfaced through different endpoints.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/plan/weekly` | Fetch the current active weekly plan (or `{ data: null }` if none) |
+| `POST` | `/api/plan/weekly/generate` | Generate (and activate) a new 7-day plan, deactivating any prior active one |
+| `PATCH` | `/api/plan/weekly/complete` | Toggle (or explicitly set) completion of one plan item by `item_id` |
+| `GET` | `/api/plan/weekly/today` | Fetch just today's slice of the plan plus completion state (used to power ARIA nudges / context injection) |
+
+### Generation
+
+`POST /api/plan/weekly/generate` accepts an optional `weekend_preference` (`'lighter' | 'same' | 'heavier'`, default `'lighter'`). It builds a fresh `AriaUserContext`, calls the LLM with `buildWeeklyPlanPrompt()` (a distinct prompt builder from both `buildAriaSystemPrompt()` and `buildPlanGenerationPrompt()`) using the same `PLAN_MODEL`/`PLAN_MAX_TOKENS` env vars as the 4-week system, and on failure or no API key falls back to `generateFallbackWeeklyPlan()` — a rule-based generator that distributes training days across the week according to `weekend_preference`, picks from a small library of workout templates/meal suggestions/mind activities, and adjusts intensity down for the day after a high-RPE (≥8) last workout.
+
+The prompt explicitly folds in recovery awareness (references the user's last workout RPE and this week's workout count so far) and the same reviewed exercise-modification deference language used elsewhere ("use ONLY that guidance... for a condition that guidance covers").
+
+Each generated plan is saved to `weekly_wellness_plans` with a computed `week_start` (Monday) / `week_end` (Sunday), `plan_data` (the full JSON), an empty `completed_items` map, and `is_active: true` — prior active plans for the user are deactivated first.
+
+### Weekly plan JSON shape (abbreviated)
+
+```json
+{
+  "overview": "2-3 sentence plan summary",
+  "aria_message": "Warm personal message from ARIA about this week's plan",
+  "weekly_targets": {
+    "workouts": 4, "calories_avg": 2000, "protein_avg_g": 120,
+    "sleep_hours": 7.5, "hydration_cups": 8, "mindfulness_minutes": 10
+  },
+  "days": [
+    {
+      "day_name": "Monday", "day_number": 1, "theme": "Upper Body Power", "is_rest_day": false,
+      "move": { "type": "strength", "title": "...", "duration_min": 30, "intensity": 7, "exercises": [ /* ... */ ], "warmup": "...", "cooldown": "..." },
+      "eat": { "calories": 2000, "protein_g": 120, "carbs_g": 250, "fat_g": 65, "hydration_cups": 8, "meal_suggestion": { "meal": "Lunch", "idea": "..." } },
+      "rest": { "bedtime": "10:30 PM", "wake_time": "6:30 AM", "sleep_hours": 8, "recovery_activity": null },
+      "mind": { "type": "breathwork", "title": "Box Breathing", "duration_min": 5, "description": "...", "journal_prompt": "..." }
+    }
+  ]
+}
+```
+
+### How this feeds back into ARIA chat
+
+`aria-context.ts` reads the active `weekly_wellness_plans` row and computes today's item completion and overall weekly completion percentage in-process (see the `weeklyPlan` field on `AriaUserContext`, documented in [Layer 1](#layer-1-context-engine)). That summary is injected into the chat system prompt as a "Weekly Plan: XX% complete | Today: ..." line, so ARIA can reference weekly-plan progress in normal conversation even though it's a completely separate system from the 4-week plan.
+
+### Monetization
+
+Unlike the 4-week plan, weekly plan generation is **not** currently rate-limited by subscription tier in the code read for this revision — the monthly cap described above applies only to `POST /api/plan/generate` (the 4-week system).
 
 ---
 
@@ -911,6 +1321,14 @@ ARIA is three things:
 
 Items 1 and 2 are **universal**. Item 3 is **app-specific**. This is where you split.
 
+### ⚠️ Open Design Question — not resolved by this doc
+
+The three-way split above (universal pattern / universal personality / app-specific context) predates tool use, guardrails, sentiment detection, and long-term memory being built. All four are real, shipped subsystems today (see the sections above), but **all four are currently implemented as fitness-app-coupled code** — the tool definitions are fitness data operations, the guardrail redirect copy is fitness-flavored, the memory summarization prompt is written for a wellness AI, and none of the four were ever explicitly assigned to either the "universal" or "app-specific" bucket in a design discussion.
+
+Plausible arguments exist for putting each of them on either side: tool-calling *as a mechanism* (define tools, execute, feed results back) looks universal, but *which* tools exist is obviously app-specific — same tension applies to guardrails (the pre-LLM filter pattern vs. the fitness-specific topic list and redirect copy), sentiment (the detector itself is domain-agnostic text analysis; the prompt injection it produces isn't), and memory (summarization mechanics are generic; the extraction prompt is wellness-specific).
+
+**This rewrite deliberately does not decide this.** Categorizing these four subsystems is a real design decision for whoever scopes the next adapter package (`@aria/core` vs. `@aria/adapter-fitness`), and it should be made deliberately, not inherited by default from wherever the code happens to live today. Flag it explicitly in that scoping conversation rather than assuming the existing file layout already reflects the right split.
+
 ### Proposed Package Structure
 
 ```
@@ -918,7 +1336,7 @@ Items 1 and 2 are **universal**. Item 3 is **app-specific**. This is where you s
 ├── types.ts                         # Generic interfaces
 ├── personality.ts                   # EASE philosophy, tone rules, base prompt sections
 ├── chat-engine.ts                   # LLM call orchestration, history management
-├── rate-limiter.ts                  # Tier-based daily limits
+├── rate-limiter.ts                  # Tier-based daily limits (timezone-aware)
 ├── fallback-engine.ts               # Base class for keyword fallback responses
 └── index.ts
 
@@ -926,6 +1344,8 @@ Items 1 and 2 are **universal**. Item 3 is **app-specific**. This is where you s
 ├── context-provider.ts              # buildAriaContext() for fitness data
 ├── prompt-config.ts                 # Fitness expertise, health rules, data injection
 ├── fallback-responses.ts            # Workout/nutrition/sleep keyword responses
+├── tools.ts                         # log_water / log_mood / get_* fitness tools — see Open Design Question above
+├── guardrails.ts                    # Fitness-flavored off-topic categories & redirects
 └── index.ts
 
 @aria/adapter-meditation/            # Hypothetical meditation app adapter
@@ -957,6 +1377,9 @@ interface AriaContextProvider<TContext> {
 
   /** Save context to cache */
   cacheContext(userId: string, context: TContext, ttlMs?: number): Promise<void>;
+
+  /** Invalidate cached context — call from any data-writing route */
+  invalidateContext(userId: string): Promise<void>;
 }
 ```
 
@@ -1007,7 +1430,9 @@ You are warm, knowledgeable, encouraging, and culturally aware.
 `;
 
 // This stays the same across ALL apps.
-// What changes per app: expertise, rules, and context injection.
+// What changes per app: expertise, rules, context injection —
+// and (per the Open Design Question above) possibly tools, guardrails,
+// sentiment prompt copy, and memory extraction prompts too.
 ```
 
 #### Usage in a New App
@@ -1040,7 +1465,7 @@ app.use('/api/aria', aria.router());
 - ARIA's core personality (warm coach, EASE philosophy)
 - Chat history schema (`aria_messages`)
 - Context caching schema (`aria_context`)
-- Rate limiting logic
+- Rate limiting logic (timezone-aware daily reset)
 - Fallback engine pattern
 - Conversation history management (last N messages)
 - LLM provider abstraction
@@ -1054,7 +1479,7 @@ app.use('/api/aria', aria.router());
 | Expertise | training, nutrition, sleep, recovery | mindfulness, breathwork, meditation styles | time management, habit science, deep work |
 | Hard rules | No medical advice, respect conditions | No therapy replacement, trauma-aware | No financial advice, respect work-life balance |
 | Fallback topics | workout, diet, sleep, pain, motivation | stress, breathing, focus, sleep, anxiety | productivity, procrastination, habits, goals |
-| Structured outputs | 4-week workout/nutrition plans | Meditation programs, breathing sequences | Weekly focus plans, habit stacks |
+| Structured outputs | 4-week + weekly wellness plans | Meditation programs, breathing sequences | Weekly focus plans, habit stacks |
 | Gamification | XP, levels, badges, streaks | Mindfulness minutes, consistency, depth | Productivity score, focus chains |
 
 ---
@@ -1087,42 +1512,50 @@ app.use('/api/aria', aria.router());
      last_updated timestamptz DEFAULT now()
    );
    ```
-   Add RLS policies so users only see their own data.
+   Add RLS policies so users only see their own data. If you're porting the long-term memory or feedback subsystems too, also add `aria_memory` and `aria_feedback` — see [Database Schema](#database-schema) for their real column usage.
 
-6. **Mount the chat router** — Wire up the 5 endpoints (messages, remaining, message, refresh-context, delete).
+6. **Mount the chat router** — Wire up all 8 endpoints (messages, remaining, message, message/stream, feedback, memories, refresh-context, delete) — not just the original 5. Decide up front whether you're porting tool use, guardrails, sentiment, and memory, or starting without them (see the Open Design Question above).
 
 7. **Set environment variables:**
    ```bash
    OPENROUTER_API_KEY=your_key
-   ARIA_MODEL=anthropic/claude-sonnet-4  # optional
-   ARIA_MAX_TOKENS=1024                   # optional
+   ARIA_MODEL=anthropic/claude-sonnet-4   # optional
+   ARIA_MAX_TOKENS=1024                    # optional
+   PLAN_MODEL=anthropic/claude-sonnet-4    # optional, if porting structured plan generation
+   PLAN_MAX_TOKENS=4096                    # optional
    ```
 
-8. **Build a chat UI** — Or adapt the existing React component. Key features: message list, input, typing indicator, rate limit display, demo mode fallback.
+8. **Build a chat UI** — Or adapt the existing React component. Key features: message list, input, typing indicator, streaming, feedback buttons, rate limit display, demo mode fallback.
 
 9. **Test without an API key first** — Verify the fallback engine works. Then add your key and test real responses.
 
-10. **Configure rate limits** — Decide on free vs premium message counts.
+10. **Configure rate limits** — Decide on free vs premium message counts, and whether to make the reset timezone-aware from day one (retrofitting it later, as this app did, leaves a period where it's UTC-only).
 
 ---
 
 ## File Map
 
-### Backend (server/)
+### Backend (server/) — 12 files, ~4,406 lines total (was previously undercounted as "~1,400 lines across 6 files")
 
 | File | Purpose | Lines |
 |---|---|---|
-| `src/utils/aria-context.ts` | Context engine — gathers user data, caching | ~340 |
-| `src/utils/aria-system-prompt.ts` | System prompt builder — personality, rules, data injection | ~200 |
-| `src/routes/aria-chat.ts` | Chat API router — all 5 endpoints | ~385 |
-| `src/routes/plan-generate.ts` | Plan generation — uses ARIA context for structured JSON output | ~100 |
+| `src/utils/aria-context.ts` | Context engine — 19 parallel queries, caching, level naming, weekly-plan summary computation | 449 |
+| `src/utils/aria-system-prompt.ts` | System prompt builder — personality, 14 hard rules, tool/memory/sentiment/vision injection | 265 |
+| `src/routes/aria-chat.ts` | Chat API router — all 8 endpoints, timezone rate limiting, guardrails, tool loop, memory trigger | 767 |
+| `src/routes/plan-generate.ts` | Two product surfaces: 4-week AI plan generation + the Weekly Wellness Plan system | 910 |
+| `src/utils/aria-tools.ts` | Tool definitions (`ARIA_TOOLS`) and server-side tool executor (8 tools) | 312 |
+| `src/utils/aria-guardrails.ts` | Pre-LLM topic guardrail filter (7 off-topic categories) | 68 |
+| `src/utils/aria-sentiment.ts` | Rule-based sentiment/energy/intent detector + prompt-hint builder | 91 |
+| `src/utils/aria-memory.ts` | Fire-and-forget long-term memory summarization + retrieval | 166 |
+| `src/utils/exercise-modifications.ts` | Curated exercise-safety modification lookup + prompt rendering | 94 |
+| `src/utils/periodization.ts` | 6-phase sport periodization modifiers for plan generation | 143 |
 
 ### Frontend (client/)
 
 | File | Purpose | Lines |
 |---|---|---|
-| `src/pages/aria/chat.tsx` | Full chat page — dual mode (API/demo), markdown, rate limits | ~550 |
-| `src/components/aria-briefing.tsx` | Dashboard briefing widget — rule-based, no API | ~300 |
+| `src/pages/aria/chat.tsx` | Full chat page — dual mode (API/demo), streaming, feedback, image upload, markdown, rate limits | 849 |
+| `src/components/aria-briefing.tsx` | Dashboard briefing widget — rule-based, no API | 292 |
 
 ### Database (server/supabase/migrations/)
 
@@ -1130,923 +1563,49 @@ app.use('/api/aria', aria.router());
 |---|---|
 | `003_sprint3_tables.sql` | `aria_messages` |
 | `005_encyclopedia_and_ai.sql` | `aria_context`, tokens_used column |
+| *(not in ground-truth source set)* | `aria_memory`, `aria_feedback`, `exercise_modifications`, `hydration_logs`, `weekly_wellness_plans`, `ai_generated_plans`, `personal_records` — real tables in active use; see [Database Schema](#database-schema) for what's verified about each |
 
 ### Routes
 
 | Type | Path |
 |---|---|
 | Client route | `/aria` -> `AriaChatPage` |
-| Server mount | `/api/aria` -> `aria-chat.ts` router |
+| Server mount | `/api/aria` -> `aria-chat.ts` router (8 endpoints) |
+| Server mount | `/api/plan` -> `plan-generate.ts` router (4-week plan + weekly wellness plan endpoints) |
 
 ---
 
-## Improvements Roadmap
+## Remaining Gaps & Open Items
 
-ARIA's current implementation is functional and well-structured, but has 10 concrete gaps that limit her from being a truly intelligent, responsive assistant. These are ordered by priority — the first three are bugs or critical missing pieces; the rest are enhancements that deepen ARIA's value.
+Earlier versions of this doc framed 9 of the following 10 items as unbuilt future work with priority levels and time estimates. Two independent audits against the real source confirmed all but one are already shipped. This section replaces that roadmap with an honest accounting of what's actually still open.
 
-### Gap Summary
+### Genuinely unbuilt: Proactive Outreach / Nudges
 
-| # | Improvement | Priority | Current State | Impact |
-|---|---|---|---|---|
-| 1 | Event-Driven Context Invalidation | Critical | Cache is TTL-only (1hr). User logs a workout, ARIA doesn't know for up to 60 min. | ARIA references stale data |
-| 2 | Tool Use / Function Calling | Critical | ARIA can only talk. She can't take actions inside the app. | Limits ARIA to chatbot instead of assistant |
-| 3 | Timezone-Aware Rate Limiting | Critical | Uses server time (UTC) for daily reset, not user's timezone. | Users get wrong reset time |
-| 4 | Streaming Responses | High | Full response arrives at once after complete generation. | Slow perceived response time |
-| 5 | Long-Term Conversation Memory | High | Only last 20 messages loaded. No cross-session memory. | ARIA forgets everything between sessions |
-| 6 | Response Feedback Loop | High | No way for users to rate responses. | Can't measure or improve quality |
-| 7 | Sentiment-Aware Prompting | Medium | System prompt says "adapt tone" but no detection mechanism. | Tone matching is hit-or-miss |
-| 8 | Proactive Outreach / Nudges | Medium | ARIA only speaks when spoken to. | Missed engagement opportunities |
-| 9 | Topic Guardrailing | Medium | Relies entirely on Claude's base behavior for off-topic. | Could break character on edge cases |
-| 10 | Multimodal Support (Vision) | Future | Text-only. Can't analyze photos. | Can't do food photo analysis, form checks, progress photos |
+ARIA is still entirely reactive — she only responds when a user opens the chat and sends a message. There is no scheduled job that reaches out about a streak about to break, several days of inactivity, or a declining sleep trend. `GET /api/plan/weekly/today` exists and is commented as "used by ARIA nudges," which suggests this was planned, but no cron job, notification table, or delivery mechanism was found in the source reviewed for this revision. If this is built, the original proposal (a `aria_nudges` table, a daily cron scanning `buildAriaContext()` output for streak/inactivity/sleep-decline/milestone triggers, delivered via dashboard badge / notification center / push / email) is still a reasonable starting design — but treat it as a fresh design exercise, not something partially built already.
 
----
+### Partially wired, not fully missing or fully done: context invalidation
 
-### Improvement 1: Event-Driven Context Invalidation
+`invalidateAriaContext()` is real and correctly bumps `profiles.aria_data_version`, but is only called after `log_water` / `log_mood` tool calls. No other data-writing route (workout logging, meal logging, sleep logging, health-profile updates, XP gain, daily-action completion) calls it — those all still depend on the 1-hour TTL alone. See [Layer 1: Context Engine](#layer-1-context-engine) for the full detail.
 
-**The Problem:**
-ARIA's context cache uses a 1-hour TTL. If a user logs a workout at 2:05 PM and then opens ARIA chat at 2:06 PM and says "how was my workout?", ARIA's cached context might still show yesterday's workout as the most recent. The cache won't refresh until 3:05 PM.
+### Two flagged-not-resolved items carried from earlier sections
 
-**Current Code (aria-context.ts:325-342):**
-```typescript
-// Only checks time — not data freshness
-const age = Date.now() - new Date(data.last_updated).getTime();
-const ONE_HOUR = 60 * 60 * 1000;
-if (age < ONE_HOUR) {
-  return data.context_data as AriaUserContext; // Could be stale
-}
-```
+These are restated here so they aren't missed by a reader skimming only this section — both need someone with the relevant context to actually verify or decide, not just be noted:
 
-**The Fix: Invalidate on Data Changes**
+- **Exercise modification condition-ID matching** ([full detail](#exercise-modification--safety-system)): `buildModificationPromptSection()`'s condition-ID filter requires values matching `/^adaptive-[a-z0-9-]+$/`, while `health.conditions` is documented throughout this doc as plain strings (`"diabetes"`, `"arthritis"`). If the real stored values are plain strings, the entire reviewed-guidance mechanism behind Hard Rule 2 could be silently returning nothing for every user. Needs someone to check the actual `health_profiles.conditions` data and any normalization in `aria-context.ts`.
+- **Sport phase fallback default** ([full detail](#sport-periodization)): `getPeriodizationModifiers()` silently falls back to `'transition'` for any unrecognized `SportPhase`. The API route guards against this today via `VALID_PHASES` validation, but the fallback itself was never a deliberate, documented design decision — anyone calling the periodization functions outside that validated route would hit it unknowingly.
 
-When any of these actions happen, delete or touch the `aria_context` row so the next `getAriaContext()` call triggers a rebuild:
+### Open design question carried from earlier section
 
-```typescript
-// Add to each data-writing route (workout, meal, sleep, mood, etc.)
-async function invalidateAriaContext(userId: string) {
-  await supabaseAdmin
-    .from('aria_context')
-    .delete()
-    .eq('user_id', userId);
-}
-
-// Example: in workout logging route
-router.post('/workout', async (req, res) => {
-  // ... save workout ...
-  await invalidateAriaContext(userId); // ARIA will rebuild on next chat
-  res.status(201).json({ data: workout });
-});
-```
-
-**Which routes should trigger invalidation:**
-- `POST /api/workouts` (new workout logged)
-- `POST /api/nutrition` (meal logged)
-- `POST /api/sleep` (sleep logged)
-- `POST /api/mood` (mood logged)
-- `POST /api/stretching` (stretch logged)
-- `POST /api/recovery` (recovery logged)
-- `PUT /api/health-profile` (health profile updated)
-- `PUT /api/profile` (profile updated)
-- `POST /api/gamification/xp` (XP gained)
-- `POST /api/daily-actions` (task completed)
-
-**Alternative: Hybrid approach** — keep the TTL but also track a `data_version` counter. Increment it on writes, compare on reads. If version mismatches, rebuild.
-
-```sql
-ALTER TABLE aria_context ADD COLUMN data_version integer DEFAULT 0;
-
--- In your app, also track:
-ALTER TABLE profiles ADD COLUMN aria_data_version integer DEFAULT 0;
--- Increment on any user data change, compare in getAriaContext()
-```
-
----
-
-### Improvement 2: Tool Use / Function Calling
-
-**The Problem:**
-ARIA can only generate text. She can't take actions. When a user says "log 8 glasses of water for me" or "show me my sleep trend this week", ARIA can only describe what to do — she can't actually do it.
-
-**The Fix: Add Claude Tools**
-
-Define tools that ARIA can call, then execute them server-side:
-
-```typescript
-const ARIA_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'log_workout',
-      description: 'Log a workout for the user',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'Workout name' },
-          duration_minutes: { type: 'number' },
-          rpe: { type: 'number', description: 'Perceived exertion 1-10' },
-          exercises: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string' },
-                sets: { type: 'number' },
-                reps: { type: 'string' },
-              },
-            },
-          },
-        },
-        required: ['title'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'log_water',
-      description: 'Log water intake for the user',
-      parameters: {
-        type: 'object',
-        properties: {
-          cups: { type: 'number', description: 'Number of cups (8oz each)' },
-        },
-        required: ['cups'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_weekly_stats',
-      description: 'Get the user\'s stats for the current week (workouts, sleep, mood, nutrition)',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_sleep_trend',
-      description: 'Get the user\'s sleep data for the past N days',
-      parameters: {
-        type: 'object',
-        properties: {
-          days: { type: 'number', description: 'Number of days to look back (default 7)' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'suggest_workout',
-      description: 'Generate a workout suggestion based on user\'s profile, recent activity, and preferences',
-      parameters: {
-        type: 'object',
-        properties: {
-          focus: { type: 'string', description: 'e.g. upper body, cardio, flexibility' },
-          duration_minutes: { type: 'number' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'set_reminder',
-      description: 'Set a reminder/nudge for the user',
-      parameters: {
-        type: 'object',
-        properties: {
-          message: { type: 'string' },
-          time: { type: 'string', description: 'ISO timestamp or relative like "tomorrow 7am"' },
-          type: { type: 'string', enum: ['workout', 'meal', 'sleep', 'water', 'general'] },
-        },
-        required: ['message'],
-      },
-    },
-  },
-];
-
-// In the LLM call:
-const response = await client.chat.completions.create({
-  model: process.env.ARIA_MODEL || 'anthropic/claude-sonnet-4',
-  max_tokens: 1024,
-  tools: ARIA_TOOLS,
-  messages: [
-    { role: 'system', content: systemPrompt },
-    ...conversationHistory,
-  ],
-});
-
-// Handle tool calls
-if (response.choices[0].message.tool_calls) {
-  for (const toolCall of response.choices[0].message.tool_calls) {
-    const result = await executeAriaTool(userId, toolCall.function.name, JSON.parse(toolCall.function.arguments));
-    // Send tool result back to Claude for final response
-  }
-}
-```
-
-**Tool executor pattern:**
-```typescript
-async function executeAriaTool(userId: string, toolName: string, args: any): Promise<string> {
-  switch (toolName) {
-    case 'log_workout':
-      const workout = await supabaseAdmin.from('workout_logs').insert({ user_id: userId, ...args }).select().single();
-      await invalidateAriaContext(userId);
-      return `Workout "${args.title}" logged successfully.`;
-
-    case 'log_water':
-      await supabaseAdmin.from('nutrition_logs').insert({ user_id: userId, food_name: 'Water', cups: args.cups });
-      return `Logged ${args.cups} cups of water.`;
-
-    case 'get_weekly_stats':
-      const context = await buildAriaContext(userId);
-      return JSON.stringify(context.recentActivity.weeklyStats);
-
-    case 'get_sleep_trend':
-      const days = args.days || 7;
-      const { data } = await supabaseAdmin.from('sleep_logs')
-        .select('duration_hours, quality_rating, sleep_score, logged_at')
-        .eq('user_id', userId)
-        .order('logged_at', { ascending: false })
-        .limit(days);
-      return JSON.stringify(data);
-
-    default:
-      return `Tool ${toolName} not implemented yet.`;
-  }
-}
-```
-
-**What this enables:**
-- "Log my workout — I did 30 minutes of yoga" -> ARIA logs it and confirms
-- "How did I sleep this week?" -> ARIA pulls real data and analyzes the trend
-- "Remind me to stretch before bed" -> ARIA sets a reminder
-- "What should I do for upper body today?" -> ARIA generates a workout from her fitness knowledge + user context
-
----
-
-### Improvement 3: Timezone-Aware Rate Limiting
-
-**The Problem:**
-Rate limiting calculates "today" using server time:
-
-```typescript
-// aria-chat.ts line 51-52
-const todayStart = new Date();
-todayStart.setHours(0, 0, 0, 0); // Server's midnight, not user's
-```
-
-If the server runs in UTC and a user is in `America/New_York` (UTC-5), their daily messages reset at 7 PM Eastern instead of midnight.
-
-**The Fix:**
-
-```typescript
-function getUserMidnight(timezone: string): Date {
-  // Get current time in user's timezone
-  const now = new Date();
-  const userTime = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-
-  // Set to midnight in user's timezone
-  userTime.setHours(0, 0, 0, 0);
-
-  // Convert back to UTC for database comparison
-  const offset = now.getTime() - userTime.getTime();
-  return new Date(now.getTime() - offset);
-}
-
-// In the rate limit check:
-const { data: profile } = await supabaseAdmin
-  .from('profiles')
-  .select('subscription_tier, timezone')
-  .eq('id', userId)
-  .maybeSingle();
-
-const timezone = profile?.timezone || 'America/New_York';
-const todayStart = getUserMidnight(timezone);
-
-const { count: todayCount } = await supabaseAdmin
-  .from('aria_messages')
-  .select('*', { count: 'exact', head: true })
-  .eq('user_id', userId)
-  .eq('role', 'user')
-  .gte('created_at', todayStart.toISOString());
-```
-
-**Note:** Since the profile is already being fetched for subscription tier, adding `timezone` to the select is free — no extra query needed.
-
----
-
-### Improvement 4: Streaming Responses
-
-**The Problem:**
-ARIA's response arrives all at once after the LLM finishes generating the entire response. For a 300-word response, this means 3-8 seconds of "ARIA is thinking..." followed by a wall of text appearing instantly. This feels slow and unnatural.
-
-**The Fix: Server-Sent Events (SSE)**
-
-**New endpoint:** `POST /api/aria/message/stream`
-
-```typescript
-router.post('/message/stream', async (req, res) => {
-  // ... rate limit check, save user message (same as before) ...
-
-  // Set SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const userContext = await getAriaContext(userId);
-  const systemPrompt = buildAriaSystemPrompt(userContext);
-
-  const stream = await client.chat.completions.create({
-    model: process.env.ARIA_MODEL || 'anthropic/claude-sonnet-4',
-    max_tokens: 1024,
-    stream: true, // Enable streaming
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory,
-    ],
-  });
-
-  let fullResponse = '';
-
-  for await (const chunk of stream) {
-    const content = chunk.choices[0]?.delta?.content || '';
-    if (content) {
-      fullResponse += content;
-      // Send each chunk as an SSE event
-      res.write(`data: ${JSON.stringify({ type: 'chunk', content })}\n\n`);
-    }
-  }
-
-  // Save complete response to database
-  const { data: ariaMessage } = await supabaseAdmin
-    .from('aria_messages')
-    .insert({
-      user_id: userId,
-      role: 'aria',
-      content: fullResponse,
-      tokens_used: 0, // OpenRouter doesn't report usage in streaming mode
-    })
-    .select()
-    .single();
-
-  // Send final event with message ID and rate limit info
-  res.write(`data: ${JSON.stringify({
-    type: 'done',
-    message_id: ariaMessage?.id,
-    rate_limit: { used: used + 1, limit: dailyLimit, remaining: remaining }
-  })}\n\n`);
-
-  res.end();
-});
-```
-
-**Frontend (React):**
-```typescript
-async function sendMessageStreaming(content: string) {
-  const response = await fetch('/api/aria/message/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ content }),
-  });
-
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let ariaText = '';
-
-  // Add a placeholder ARIA message that we'll update as chunks arrive
-  const placeholderId = crypto.randomUUID();
-  setMessages(prev => [...prev, { id: placeholderId, role: 'aria', text: '', timestamp: Date.now() }]);
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const lines = decoder.decode(value).split('\n');
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const event = JSON.parse(line.slice(6));
-
-      if (event.type === 'chunk') {
-        ariaText += event.content;
-        // Update the placeholder message with accumulated text
-        setMessages(prev => prev.map(m =>
-          m.id === placeholderId ? { ...m, text: ariaText } : m
-        ));
-      }
-
-      if (event.type === 'done') {
-        // Update with final message ID from database
-        setMessages(prev => prev.map(m =>
-          m.id === placeholderId ? { ...m, id: event.message_id } : m
-        ));
-        setRateLimit(event.rate_limit);
-      }
-    }
-  }
-}
-```
-
----
-
-### Improvement 5: Long-Term Conversation Memory
-
-**The Problem:**
-ARIA loads the last 20 messages as conversation context. But if a user told ARIA last week "I'm training for a half marathon in October" or "my knee has been bothering me lately", that information is lost once it scrolls past the 20-message window. The system prompt has the user's profile data, but not the nuances and goals they've discussed conversationally.
-
-**The Fix: Periodic Conversation Summarization**
-
-**New table:**
-```sql
-CREATE TABLE aria_memory (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  memory_type text NOT NULL CHECK (memory_type IN ('conversation_summary', 'user_preference', 'goal', 'concern')),
-  content     text NOT NULL,
-  source_date timestamptz NOT NULL,  -- When the original conversation happened
-  created_at  timestamptz DEFAULT now(),
-  expires_at  timestamptz           -- Optional: auto-expire old memories
-);
-
-CREATE INDEX idx_aria_memory_user_id ON aria_memory(user_id);
-```
-
-**Summarization process** (runs after every 10 new messages, or daily via cron):
-
-```typescript
-async function summarizeConversation(userId: string) {
-  // Get messages not yet summarized
-  const { data: messages } = await supabaseAdmin
-    .from('aria_messages')
-    .select('role, content, created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: true })
-    .limit(50);
-
-  if (!messages || messages.length < 10) return; // Not enough to summarize
-
-  const summarizationPrompt = `Analyze this conversation between a user and ARIA (wellness AI assistant).
-Extract ONLY information that would be useful in future conversations:
-- Goals the user mentioned (training for an event, weight target, etc.)
-- Concerns or struggles they shared (knee pain, poor sleep, stress at work)
-- Preferences they expressed (likes yoga, hates running, prefers morning workouts)
-- Important life context (new job, injury recovery, pregnant, etc.)
-
-Return a JSON array of memories:
-[
-  { "type": "goal", "content": "Training for a half marathon in October 2024" },
-  { "type": "concern", "content": "Right knee pain that flares up during running" },
-  { "type": "user_preference", "content": "Prefers bodyweight exercises at home, no gym access" }
-]
-
-Only include genuinely useful information. Skip greetings, generic questions, and routine check-ins.
-Return ONLY valid JSON.`;
-
-  const response = await client.chat.completions.create({
-    model: 'anthropic/claude-haiku-4-5-20251001', // Use a fast/cheap model for summarization
-    max_tokens: 500,
-    messages: [
-      { role: 'system', content: summarizationPrompt },
-      { role: 'user', content: messages.map(m => `[${m.role}]: ${m.content}`).join('\n') },
-    ],
-  });
-
-  const memories = JSON.parse(response.choices[0].message.content);
-
-  for (const memory of memories) {
-    await supabaseAdmin.from('aria_memory').insert({
-      user_id: userId,
-      memory_type: memory.type,
-      content: memory.content,
-      source_date: messages[0].created_at,
-    });
-  }
-}
-```
-
-**Inject memories into system prompt:**
-
-```typescript
-// In buildAriaSystemPrompt(), add a new section:
-const { data: memories } = await supabaseAdmin
-  .from('aria_memory')
-  .select('memory_type, content, source_date')
-  .eq('user_id', userId)
-  .order('source_date', { ascending: false })
-  .limit(20);
-
-// Add to system prompt:
-## WHAT YOU REMEMBER FROM PAST CONVERSATIONS
-${memories.map(m => `- [${m.memory_type}] ${m.content} (from ${new Date(m.source_date).toLocaleDateString()})`).join('\n')}
-
-Use these memories naturally — reference them when relevant, but don't force them.
-If a memory seems outdated, ask the user if it's still accurate.
-```
-
----
-
-### Improvement 6: Response Feedback Loop
-
-**The Problem:**
-There's no mechanism to know whether ARIA's responses are helpful. Without feedback data, you can't:
-- Identify which system prompt rules produce good vs bad responses
-- Tune the model or prompt based on real user satisfaction
-- Detect when ARIA is consistently unhelpful on certain topics
-
-**The Fix:**
-
-**New table:**
-```sql
-CREATE TABLE aria_feedback (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  message_id  uuid NOT NULL REFERENCES aria_messages(id) ON DELETE CASCADE,
-  rating      smallint NOT NULL CHECK (rating IN (-1, 1)), -- thumbs down / up
-  feedback    text,                                         -- optional written feedback
-  created_at  timestamptz DEFAULT now(),
-  UNIQUE(user_id, message_id)                               -- one rating per message
-);
-```
-
-**New endpoint:**
-```typescript
-// POST /api/aria/feedback
-router.post('/feedback', async (req, res) => {
-  const userId = req.user!.id;
-  const { message_id, rating, feedback } = req.body;
-
-  // Verify the message belongs to this user and is an ARIA response
-  const { data: message } = await supabaseAdmin
-    .from('aria_messages')
-    .select('role')
-    .eq('id', message_id)
-    .eq('user_id', userId)
-    .eq('role', 'aria')
-    .maybeSingle();
-
-  if (!message) {
-    res.status(404).json({ error: 'Message not found' });
-    return;
-  }
-
-  await supabaseAdmin.from('aria_feedback').upsert({
-    user_id: userId,
-    message_id,
-    rating,        // 1 = helpful, -1 = not helpful
-    feedback,      // optional text: "this didn't account for my knee injury"
-  }, { onConflict: 'user_id, message_id' });
-
-  res.status(200).json({ message: 'Feedback recorded' });
-});
-```
-
-**Frontend: Thumbs up/down on each ARIA message:**
-```tsx
-{msg.role === 'aria' && (
-  <div className="flex gap-1 mt-1">
-    <button onClick={() => submitFeedback(msg.id, 1)} className="text-text-muted hover:text-accent">
-      <ThumbsUp className="h-3.5 w-3.5" />
-    </button>
-    <button onClick={() => submitFeedback(msg.id, -1)} className="text-text-muted hover:text-red-400">
-      <ThumbsDown className="h-3.5 w-3.5" />
-    </button>
-  </div>
-)}
-```
-
-**How to use the data:**
-- Dashboard analytics: % positive ratings over time, by topic
-- If a topic consistently gets thumbs-down, revise the system prompt rules for that area
-- Feed negative-rated exchanges into prompt improvement iterations
-
----
-
-### Improvement 7: Sentiment-Aware Prompting
-
-**The Problem:**
-ARIA's system prompt instructs "adapt your tone to their current state (if they're stressed, be calming; if they're energized, match their energy)" — but the prompt itself doesn't tell ARIA what state the user is in. It relies entirely on Claude's inference from the raw message text.
-
-This works reasonably well, but explicit sentiment hints improve consistency, especially for short or ambiguous messages like "whatever" or "fine I guess."
-
-**The Fix: Lightweight Sentiment Analysis Before Prompt Building**
-
-```typescript
-interface SentimentHint {
-  mood: 'positive' | 'neutral' | 'negative' | 'distressed';
-  energy: 'high' | 'medium' | 'low';
-  intent: 'question' | 'venting' | 'celebration' | 'request' | 'greeting' | 'unknown';
-}
-
-function detectSentiment(message: string): SentimentHint {
-  const lower = message.toLowerCase();
-
-  // Distress signals (highest priority)
-  const distressPatterns = /\b(can't take|give up|hopeless|hate my|what's the point|worthless|breaking down|falling apart)\b/;
-  if (distressPatterns.test(lower)) {
-    return { mood: 'distressed', energy: 'low', intent: 'venting' };
-  }
-
-  // Negative signals
-  const negativePatterns = /\b(frustrated|angry|sad|tired|exhausted|stressed|anxious|worried|struggling|failed|sucks|horrible|terrible|ugh|can't|won't)\b/;
-  const negativeCount = (lower.match(negativePatterns) || []).length;
-
-  // Positive signals
-  const positivePatterns = /\b(great|awesome|amazing|excited|proud|happy|love|nailed|crushed it|personal best|pb|pr|finally|yes!|let's go)\b/;
-  const positiveCount = (lower.match(positivePatterns) || []).length;
-
-  // Energy signals
-  const highEnergyPatterns = /!{2,}|\b(let's go|pumped|fired up|ready|bring it|crush)\b/;
-  const lowEnergyPatterns = /\b(tired|exhausted|drained|low energy|sluggish|meh|whatever|idk)\b/;
-
-  // Intent detection
-  let intent: SentimentHint['intent'] = 'unknown';
-  if (/\?/.test(message) || /\b(how|what|why|when|should|can|could|is it|do you)\b/.test(lower)) intent = 'question';
-  else if (negativeCount > 0 && !/\?/.test(message)) intent = 'venting';
-  else if (positiveCount > 0) intent = 'celebration';
-  else if (/\b(help|show|give|log|set|create|make|find)\b/.test(lower)) intent = 'request';
-  else if (/^(hi|hello|hey|good morning|good evening)/.test(lower)) intent = 'greeting';
-
-  return {
-    mood: positiveCount > negativeCount ? 'positive' : negativeCount > 0 ? 'negative' : 'neutral',
-    energy: highEnergyPatterns.test(lower) ? 'high' : lowEnergyPatterns.test(lower) ? 'low' : 'medium',
-    intent,
-  };
-}
-```
-
-**Inject into system prompt:**
-
-```typescript
-// Before calling the LLM, analyze the latest message:
-const sentiment = detectSentiment(content.trim());
-
-// Add as a hint at the end of the system prompt:
-const sentimentHint = `
-## CURRENT MESSAGE CONTEXT
-The user's message suggests: ${sentiment.mood} mood, ${sentiment.energy} energy, intent: ${sentiment.intent}.
-${sentiment.mood === 'distressed' ? 'IMPORTANT: The user may be in distress. Be extra gentle, validate their feelings, and suggest professional support if appropriate.' : ''}
-${sentiment.mood === 'negative' ? 'Be empathetic and validating before offering advice.' : ''}
-${sentiment.intent === 'celebration' ? 'Match their excitement! Celebrate with them.' : ''}
-${sentiment.intent === 'venting' ? 'Listen first. Don\'t jump to solutions unless asked.' : ''}
-`;
-```
-
----
-
-### Improvement 8: Proactive Outreach / Nudges
-
-**The Problem:**
-ARIA is entirely reactive — she only responds when the user opens the chat and types. She misses opportunities to engage: a user whose streak is about to break, someone who hasn't logged a workout in 5 days, or a user whose sleep scores have been declining.
-
-**The Fix: Scheduled Nudge Engine**
-
-**New table:**
-```sql
-CREATE TABLE aria_nudges (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  nudge_type  text NOT NULL,        -- 'streak_warning', 'inactivity', 'sleep_decline', 'celebration'
-  title       text NOT NULL,        -- Short headline
-  message     text NOT NULL,        -- ARIA's nudge message
-  action_url  text,                 -- Deep link (e.g., '/aria' or '/workouts/log')
-  read        boolean DEFAULT false,
-  created_at  timestamptz DEFAULT now()
-);
-```
-
-**Nudge generator (runs via cron, e.g., daily at 8 AM user-local-time):**
-
-```typescript
-async function generateNudges() {
-  // Get all active users
-  const { data: users } = await supabaseAdmin
-    .from('profiles')
-    .select('id, display_name, timezone')
-    .eq('onboarding_complete', true);
-
-  for (const user of users || []) {
-    const context = await buildAriaContext(user.id);
-
-    // Streak about to break (active streak but no activity today)
-    if (context.gamification.current_streak >= 3 && !context.recentActivity.lastWorkout) {
-      await createNudge(user.id, 'streak_warning',
-        `Don't lose your ${context.gamification.current_streak}-day streak!`,
-        `Hey ${context.profile.name}, you've got a ${context.gamification.current_streak}-day streak going strong. Even a quick 10-minute session counts. Want me to suggest something fast?`,
-        '/aria'
-      );
-    }
-
-    // Inactivity (no workout in 3+ days)
-    if (context.recentActivity.lastWorkout) {
-      const daysSince = (Date.now() - new Date(context.recentActivity.lastWorkout.date).getTime()) / (1000 * 60 * 60 * 24);
-      if (daysSince >= 3) {
-        await createNudge(user.id, 'inactivity',
-          'Your body misses you',
-          `It's been ${Math.floor(daysSince)} days since your last workout, ${context.profile.name}. No pressure — want to start with something light today?`,
-          '/workouts/log'
-        );
-      }
-    }
-
-    // Sleep declining (3-day average below 6 hours)
-    if (context.recentActivity.weeklyStats.avg_sleep_hours > 0 && context.recentActivity.weeklyStats.avg_sleep_hours < 6) {
-      await createNudge(user.id, 'sleep_decline',
-        'Let\'s talk about your sleep',
-        `${context.profile.name}, your average sleep this week is ${context.recentActivity.weeklyStats.avg_sleep_hours} hours. That can affect everything from mood to recovery. Want to chat about what's going on?`,
-        '/aria'
-      );
-    }
-
-    // Milestone celebration
-    if (context.gamification.current_streak === 7 || context.gamification.current_streak === 30) {
-      await createNudge(user.id, 'celebration',
-        `${context.gamification.current_streak}-day streak!`,
-        `${context.profile.name}, ${context.gamification.current_streak} days in a row! That is incredible consistency. You should be proud of yourself.`,
-        '/dashboard'
-      );
-    }
-  }
-}
-```
-
-**Delivery channels:**
-- Dashboard notification badge
-- In-app notification center
-- Push notification (via web push API or service worker)
-- Email digest (optional)
-
----
-
-### Improvement 9: Topic Guardrailing
-
-**The Problem:**
-ARIA's system prompt says "never break character" but there's no enforcement layer. If a user asks "what stocks should I buy?" or "write me a Python script", ARIA's response depends entirely on Claude's base behavior. She might answer, might not — it's inconsistent.
-
-**The Fix: Pre-LLM Topic Filter**
-
-```typescript
-interface TopicCheck {
-  allowed: boolean;
-  redirect_message?: string;
-}
-
-function checkTopicRelevance(message: string): TopicCheck {
-  const lower = message.toLowerCase();
-
-  // Explicit off-topic patterns
-  const offTopicPatterns = [
-    { pattern: /\b(stock|invest|crypto|bitcoin|trading|portfolio)\b/, topic: 'finance' },
-    { pattern: /\b(code|program|debug|javascript|python|sql|html|css|api)\b/, topic: 'programming' },
-    { pattern: /\b(politics|election|vote|democrat|republican|trump|biden)\b/, topic: 'politics' },
-    { pattern: /\b(recipe for disaster|bomb|weapon|hack|exploit)\b/, topic: 'harmful' },
-    { pattern: /\b(write me a story|poem|essay|song lyrics)\b/, topic: 'creative writing' },
-  ];
-
-  for (const { pattern, topic } of offTopicPatterns) {
-    if (pattern.test(lower)) {
-      const redirectMessages: Record<string, string> = {
-        finance: "I'm flattered you'd ask, but financial advice is outside my expertise! I'm all about wellness — fitness, nutrition, sleep, and mindset. What can I help you with on that front?",
-        programming: "Ha, I wish I could help with code, but my superpowers are in wellness, not software! If you have questions about training, nutrition, or recovery, I'm your person.",
-        politics: "I stay in my lane on that one! I'm here for your physical and mental wellness. Want to talk about something fitness or health related instead?",
-        harmful: "That's not something I can help with. I'm here to support your wellness journey — fitness, nutrition, sleep, and mindset. What would you like to work on?",
-        'creative writing': "I'm more of a wellness coach than a writer! But I can definitely help you journal about your fitness journey, set goals, or reflect on your progress. Interested?",
-      };
-
-      return {
-        allowed: false,
-        redirect_message: redirectMessages[topic] || "That's a bit outside my wheelhouse! I'm best at helping with fitness, nutrition, sleep, recovery, and mindset. What wellness topic can I help with?",
-      };
-    }
-  }
-
-  return { allowed: true };
-}
-
-// In the message handler, before calling the LLM:
-const topicCheck = checkTopicRelevance(content.trim());
-if (!topicCheck.allowed) {
-  ariaResponse = topicCheck.redirect_message!;
-  // Skip LLM call entirely — save tokens and ensure consistent behavior
-}
-```
-
-**Why filter before the LLM instead of relying on prompt rules:**
-- Saves API cost (no LLM call needed for obvious off-topic)
-- Consistent behavior (prompt rules are suggestions to the model, not guarantees)
-- Faster response (no API latency)
-- Still falls through to the LLM for ambiguous cases
-
----
-
-### Improvement 10: Multimodal Support (Vision)
-
-**The Problem:**
-ARIA can't see. Users can't share:
-- Progress photos ("How's my form on this squat?")
-- Food photos ("Estimate the macros in this meal")
-- Screenshots of their wearable data
-- Photos of supplement labels ("Is this a good protein powder?")
-
-**The Fix: Image Upload + Vision Model**
-
-**Backend changes:**
-
-```typescript
-// Accept base64 images or file uploads
-router.post('/message', upload.single('image'), async (req, res) => {
-  const { content } = req.body;
-  const image = req.file;
-
-  // Build messages array
-  const userContent: any[] = [];
-
-  if (content) {
-    userContent.push({ type: 'text', text: content.trim() });
-  }
-
-  if (image) {
-    const base64 = image.buffer.toString('base64');
-    const mimeType = image.mimetype;
-    userContent.push({
-      type: 'image_url',
-      image_url: { url: `data:${mimeType};base64,${base64}` },
-    });
-  }
-
-  // Use a vision-capable model
-  const response = await client.chat.completions.create({
-    model: 'anthropic/claude-sonnet-4', // Claude supports vision natively
-    max_tokens: 1024,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory,
-      { role: 'user', content: userContent },
-    ],
-  });
-
-  // ... save and return as before
-});
-```
-
-**System prompt addition:**
-```
-## IMAGE ANALYSIS
-When the user shares an image:
-- Food photos: Estimate portion sizes and macronutrients. Be honest about uncertainty.
-- Exercise form: Point out what looks good AND what could be improved. Be encouraging.
-- Progress photos: Focus on visible improvements. Never make negative comments about body appearance.
-- Supplement labels: Analyze ingredients, highlight evidence-based ones, flag anything concerning.
-- Always ask follow-up questions for context you can't determine from the image alone.
-```
-
-**Frontend: Image upload in chat input:**
-```tsx
-<div className="flex items-center gap-2">
-  <label className="cursor-pointer">
-    <Camera className="h-5 w-5 text-text-muted hover:text-primary" />
-    <input type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
-  </label>
-  <input type="text" value={input} onChange={...} placeholder="Ask ARIA anything..." />
-  <Button onClick={handleSend}><Send /></Button>
-</div>
-```
-
----
-
-### Implementation Priority Matrix
-
-For developers looking to implement these improvements, here's the recommended order:
-
-**Phase 1 — Fix What's Broken (Week 1)**
-1. Timezone-aware rate limiting (1 hour — smallest change, biggest correctness impact)
-2. Event-driven context invalidation (2-3 hours — add `invalidateAriaContext()` calls to existing routes)
-
-**Phase 2 — Core Intelligence Upgrades (Weeks 2-3)**
-3. Tool use / function calling (1-2 days — transforms ARIA from chatbot to assistant)
-4. Streaming responses (1 day — dramatically improves perceived speed)
-5. Response feedback (half day — simple but enables data-driven improvement)
-
-**Phase 3 — Deep Personalization (Weeks 4-5)**
-6. Long-term memory (1-2 days — conversation summarization + prompt injection)
-7. Sentiment-aware prompting (half day — lightweight detection, big tone improvement)
-8. Topic guardrailing (half day — pre-LLM filter with graceful redirects)
-
-**Phase 4 — Engagement & Vision (Weeks 6+)**
-9. Proactive nudges (2-3 days — cron job + notification system + delivery)
-10. Multimodal / vision (1-2 days — image upload + vision model config)
+- **Universal vs. app-specific categorization of tool use, guardrails, sentiment, and memory** ([full detail](#making-aria-cross-project)) — genuinely undecided, not something this rewrite resolves.
 
 ---
 
 ## Summary
 
-ARIA is ~1,400 lines of TypeScript across 6 files. She is not a framework — she is a **pattern**:
+ARIA is **~4,406 lines of TypeScript across 12 files** (not the ~1,400 lines across 6 files claimed by earlier versions of this doc — that figure covered only the context engine, prompt builder, chat router, plan generator, chat page, and briefing widget, and missed the entire tool-use, guardrails, sentiment, memory, exercise-modification, and periodization subsystems, plus the Weekly Wellness Plan surface layered into `plan-generate.ts`). She is not a framework — she is a **pattern**:
 
-> **Gather context -> Inject into personality prompt -> Call LLM -> Persist history -> Degrade gracefully**
+> **Gather context -> Inject into personality prompt (with tool/memory/sentiment/safety signals) -> Call LLM, letting her use tools if needed -> Persist history + long-term memory -> Degrade gracefully**
 
-That pattern is domain-agnostic. The fitness-specific parts (what data to gather, what expertise to claim, what topics to fall back on) are cleanly separated from the universal parts (personality, caching, rate limiting, history management, LLM orchestration).
+That pattern is domain-agnostic. The fitness-specific parts (what data to gather, what expertise to claim, what topics to fall back on, which tools exist, what the guardrail redirects say) are — today — bundled together with the universal parts (personality, caching, rate limiting, history management, LLM orchestration) rather than cleanly separated; see the Open Design Question in [Making ARIA Cross-Project](#making-aria-cross-project) for what still needs deciding before that separation is real.
 
-To put ARIA in a new app, you don't fork the code — you implement the same pattern with your domain's context, expertise, and rules.
-
-With the 10 improvements outlined above, ARIA evolves from a personalized chatbot into a proactive, action-taking, emotionally intelligent assistant with long-term memory, visual understanding, and a data-driven feedback loop for continuous improvement.
+To put ARIA in a new app, you don't fork the code — you implement the same pattern with your domain's context, expertise, rules, tools, and guardrails. What's actually shipped today is considerably more capable than earlier versions of this doc credited: tool use, streaming, long-term memory, response feedback, sentiment-aware prompting, topic guardrailing, and image/vision support are all real and running in production, not aspirational. The one substantive gap that remains is proactive nudges — everything else in the old "roadmap" was already built.
