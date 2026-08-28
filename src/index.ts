@@ -13,3 +13,5 @@ export { AnthropicProvider } from './providers/anthropic.js';
 export type { AnthropicProviderConfig } from './providers/anthropic.js';
 export { ChatEngine, RateLimitExceededError } from './chat-engine.js';
 export type { ChatEngineDeps, SendMessageResult } from './chat-engine.js';
+export { GuardrailFilter } from './guardrail-filter.js';
+export type { GuardrailCategory, GuardrailFilterConfig } from './guardrail-filter.js';
