@@ -8,7 +8,6 @@ function makeFilter() {
       { key: 'legal', pattern: /\b(lawyer|lawsuit)\b/i, redirectMessage: 'legal redirect' },
     ],
     overridePattern: /\b(workout|nutrition)\b/i,
-    defaultRedirectMessage: 'default redirect',
   });
 }
 
@@ -47,7 +46,6 @@ describe('GuardrailFilter', () => {
     const filter = new GuardrailFilter({
       categories: [{ key: 'finance', pattern: /invest/i, redirectMessage: 'finance redirect' }],
       overridePattern: /workout/i,
-      defaultRedirectMessage: 'default redirect',
       shortMessageThreshold: 3,
     });
     // "invest" is 6 chars, over the threshold of 3, so it should be checked and blocked.

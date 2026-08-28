@@ -10,7 +10,6 @@ export interface GuardrailFilterConfig {
   categories: GuardrailCategory[];
   /** If this matches, the message is allowed through even if it also matches a category — checked before categories, not after. */
   overridePattern: RegExp;
-  defaultRedirectMessage: string;
   /** Messages shorter than this are always allowed. Defaults to 15, matching the real My Body threshold. */
   shortMessageThreshold?: number;
 }
@@ -18,13 +17,11 @@ export interface GuardrailFilterConfig {
 export class GuardrailFilter {
   private categories: GuardrailCategory[];
   private overridePattern: RegExp;
-  private defaultRedirectMessage: string;
   private shortMessageThreshold: number;
 
   constructor(config: GuardrailFilterConfig) {
     this.categories = config.categories;
     this.overridePattern = config.overridePattern;
-    this.defaultRedirectMessage = config.defaultRedirectMessage;
     this.shortMessageThreshold = config.shortMessageThreshold ?? 15;
   }
 

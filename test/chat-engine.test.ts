@@ -274,7 +274,6 @@ describe('ChatEngine.sendMessage — guardrails', () => {
     const guardrails = new GuardrailFilter({
       categories: [{ key: 'finance', pattern: /invest/i, redirectMessage: 'finance redirect' }],
       overridePattern: /workout/i,
-      defaultRedirectMessage: 'default redirect',
     });
     const { engine } = buildEngine({ llmProvider, guardrails });
 
@@ -288,7 +287,6 @@ describe('ChatEngine.sendMessage — guardrails', () => {
     const guardrails = new GuardrailFilter({
       categories: [{ key: 'legal', pattern: /lawyer/i, redirectMessage: 'legal redirect' }],
       overridePattern: /workout/i,
-      defaultRedirectMessage: 'default redirect',
     });
     const { engine } = buildEngine({ guardrails });
 

@@ -28,6 +28,7 @@ export interface AriaHistoryStore {
     message: { role: AriaMessage['role']; content: string }
   ): Promise<AriaMessage>;
   clearMessages(userId: string): Promise<void>;
+  /** Count of messages with `createdAt >= since` (inclusive) — do NOT use this for a "strictly after" gate like memory summarization; see AriaMemoryStore.countMessagesSince for that contract instead. */
   countMessagesSince(
     userId: string,
     since: Date,
