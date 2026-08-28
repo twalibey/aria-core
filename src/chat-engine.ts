@@ -13,6 +13,9 @@ import { checkSafety } from './safety-filter.js';
 import { ToolRegistry } from './tools.js';
 import { FallbackEngine } from './fallback-engine.js';
 import { RateLimiter } from './rate-limiter.js';
+import type { GuardrailFilter } from './guardrail-filter.js';
+import type { SentimentDetector } from './sentiment.js';
+import type { MemoryManager } from './memory-manager.js';
 
 /**
  * Where in `generateResponse` a failure happened. `context` covers history
@@ -43,6 +46,12 @@ export interface ChatEngineDeps<TContext> {
    * with no telemetry. Consumers should wire this to their logger/monitoring.
    */
   onError?: ChatEngineErrorHook;
+  /** Pre-LLM topic filter. Runs AFTER checkSafety, which always wins if both would match. */
+  guardrails?: GuardrailFilter;
+  /** Appends a prompt section based on the detected sentiment of the current message. */
+  sentiment?: SentimentDetector;
+  /** Appends a "what you remember" prompt section and fires fire-and-forget summarization after each response. */
+  memory?: MemoryManager;
 }
 
 export interface SendMessageResult {
@@ -77,6 +86,10 @@ export class ChatEngine<TContext> {
       throw new RateLimitExceededError(rateLimit);
     }
 
+    // checkSafety (crisis) always runs before guardrails (topic) and always
+    // wins if both would match — they never coexisted in the source this was
+    // ported from, so this ordering is a deliberate design decision, not an
+    // inherited one. See docs/superpowers/specs/2026-08-28-aria-adapter-fitness-design.md.
     const safety = checkSafety(content);
     const userMessage = await this.deps.historyStore.saveMessage(userId, {
       role: 'user',
@@ -87,6 +100,15 @@ export class ChatEngine<TContext> {
       const ariaMessage = await this.deps.historyStore.saveMessage(userId, {
         role: 'assistant',
         content: safety.response!,
+      });
+      return { userMessage, ariaMessage, rateLimit };
+    }
+
+    const guardrailResult = this.deps.guardrails?.check(content);
+    if (guardrailResult && !guardrailResult.allowed) {
+      const ariaMessage = await this.deps.historyStore.saveMessage(userId, {
+        role: 'assistant',
+        content: guardrailResult.redirectMessage!,
       });
       return { userMessage, ariaMessage, rateLimit };
     }
@@ -102,6 +124,9 @@ export class ChatEngine<TContext> {
       role: 'assistant',
       content: responseText,
     });
+
+    // Fire-and-forget: must not affect the returned result either way.
+    this.deps.memory?.maybeSummarize(userId).catch(() => {});
 
     return { userMessage, ariaMessage, rateLimit };
   }
@@ -136,11 +161,20 @@ export class ChatEngine<TContext> {
     }
 
     const priorMessages = history.map((m) => ({ role: m.role, content: m.content }));
+    const currentContent = history[history.length - 1]?.content ?? '';
 
     let systemPrompt: string;
     let response;
     try {
       systemPrompt = buildSystemPrompt(this.deps.promptConfig, context);
+
+      if (this.deps.sentiment) {
+        systemPrompt += this.deps.sentiment.buildPromptSection(this.deps.sentiment.detect(currentContent));
+      }
+      if (this.deps.memory) {
+        systemPrompt += await this.deps.memory.buildMemoryPromptSection(userId);
+      }
+
       const tools = this.deps.toolRegistry.getDefinitions();
 
       response = await this.deps.llmProvider.call({
@@ -161,9 +195,15 @@ export class ChatEngine<TContext> {
     if (response.toolCalls && response.toolCalls.length > 0) {
       let toolResults: string[];
       try {
+        const definitionsByName = new Map(
+          this.deps.toolRegistry.getDefinitions().map((d) => [d.name, d])
+        );
         toolResults = await Promise.all(
           response.toolCalls.map(async (call) => {
             const result = await this.deps.toolRegistry.execute(userId, call.name, call.arguments);
+            if (definitionsByName.get(call.name)?.mutatesContext) {
+              this.deps.contextProvider.invalidate(userId).catch(() => {});
+            }
             return `[${call.name}] ${result.success ? result.result : `Error: ${result.error}`}`;
           })
         );

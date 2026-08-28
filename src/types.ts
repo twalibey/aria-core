@@ -59,6 +59,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   parameters: object;
+  /** If true, ChatEngine invalidates the cached context for this user after this tool executes. */
+  mutatesContext?: boolean;
 }
 
 export interface LLMToolCall {
