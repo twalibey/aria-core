@@ -17,3 +17,5 @@ export { GuardrailFilter } from './guardrail-filter.js';
 export type { GuardrailCategory, GuardrailFilterConfig } from './guardrail-filter.js';
 export { SentimentDetector } from './sentiment.js';
 export type { SentimentDetectorConfig } from './sentiment.js';
+export { MemoryManager } from './memory-manager.js';
+export type { MemoryManagerConfig } from './memory-manager.js';
