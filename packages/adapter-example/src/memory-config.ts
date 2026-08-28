@@ -8,7 +8,9 @@ class InMemoryMemoryStore implements AriaMemoryStore {
   constructor(private historyStore: AriaHistoryStore) {}
 
   async countMessagesSince(userId: string, since: Date): Promise<number> {
-    return this.historyStore.countMessagesSince(userId, since);
+    // Count messages STRICTLY after `since`, not including messages at the same instant
+    const messages = await this.historyStore.getRecentMessages(userId, 1000);
+    return messages.filter((m) => m.createdAt > since).length;
   }
 
   async getLastSummarizedAt(userId: string): Promise<Date | null> {
