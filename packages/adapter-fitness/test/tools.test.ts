@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createFitnessTools, type FitnessDataStore } from '../src/tools';
 
-function makeStore(): FitnessDataStore {
+function makeStore(): FitnessDataStore & {
+  hydrationLogs: { userId: string; cups: number }[];
+  moodLogs: { userId: string; moodRating: number; energyRating: number; stressLevel: number; note: string | null }[];
+} {
   const hydrationLogs: { userId: string; cups: number }[] = [];
   const moodLogs: { userId: string; moodRating: number; energyRating: number; stressLevel: number; note: string | null }[] = [];
   return {
