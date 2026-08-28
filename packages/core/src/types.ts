@@ -133,3 +133,13 @@ export interface FallbackTopic {
   match: RegExp;
   response: string;
 }
+
+// ============================================================
+// Sentiment
+// ============================================================
+
+export interface SentimentHint {
+  mood: 'positive' | 'neutral' | 'negative' | 'distressed';
+  energy: 'high' | 'medium' | 'low';
+  intent: 'question' | 'venting' | 'celebration' | 'request' | 'greeting' | 'unknown';
+}
