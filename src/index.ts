@@ -15,3 +15,5 @@ export { ChatEngine, RateLimitExceededError } from './chat-engine.js';
 export type { ChatEngineDeps, SendMessageResult } from './chat-engine.js';
 export { GuardrailFilter } from './guardrail-filter.js';
 export type { GuardrailCategory, GuardrailFilterConfig } from './guardrail-filter.js';
+export { SentimentDetector } from './sentiment.js';
+export type { SentimentDetectorConfig } from './sentiment.js';
