@@ -33,3 +33,20 @@
 **Action:** Track false-negative rate once `safety-filter.ts` is in use; consider a second verification layer (e.g., a lightweight classifier pass) if pattern matching proves insufficient once real usage exists.
 
 **Blocking:** Nothing in Phase 1 (synthetic adapter, no real users). Should be reassessed before Phase 2 (My Body migration) goes live with real users.
+
+---
+
+## RISK-003: Guardrail-category and sentiment-pattern lists are hand-maintained, not exhaustive
+
+**Status:** Open
+**Filed:** 2026-08-28
+**Source:** `gap-analysis` pass during `@aria/adapter-fitness` design review
+
+**Description:** The new `GuardrailFilter` (topic off-topic detection) and `SentimentDetector` mechanisms added to `@aria/core` for adapter-fitness operate entirely on adapter-supplied regex/keyword pattern lists — the same class of risk RISK-002 already tracks for `safety-filter.ts`'s crisis patterns. These lists (7 off-topic categories, a wellness-keyword override, 6 sentiment pattern sets) are ported faithfully from real My Body source as of 2026-08-28, but pattern matching has inherent false-negative and false-positive potential, and there is no automated way to detect drift or coverage gaps as real usage accumulates.
+
+**Likelihood:** Medium (hand-maintained keyword/regex lists reliably miss phrasings over time)
+**Impact:** Medium (a missed off-topic redirect wastes tokens on an out-of-scope reply; a missed sentiment cue produces a tonally mismatched response — neither is safety-critical the way RISK-002 is, since crisis detection is a separate, earlier-running mechanism)
+
+**Action:** Track false-negative/false-positive reports once a real adapter-fitness consumer exists; consider periodic pattern-list review or a lightweight classifier fallback if manual pattern maintenance proves insufficient.
+
+**Blocking:** Nothing currently (no real consumer yet). Should be reassessed once `@aria/adapter-fitness` or `@aria/adapter-corpflow` has real users.
