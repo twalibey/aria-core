@@ -1319,13 +1319,20 @@ ARIA is three things:
 
 Items 1 and 2 are **universal**. Item 3 is **app-specific**. This is where you split.
 
-### ⚠️ Open Design Question — not resolved by this doc
+### Design Decision (resolved 2026-08-28): mechanism in core, specifics in adapter
 
-The three-way split above (universal pattern / universal personality / app-specific context) predates tool use, guardrails, sentiment detection, and long-term memory being built. All four are real, shipped subsystems today (see the sections above), but **all four are currently implemented as fitness-app-coupled code** — the tool definitions are fitness data operations, the guardrail redirect copy is fitness-flavored, the memory summarization prompt is written for a wellness AI, and none of the four were ever explicitly assigned to either the "universal" or "app-specific" bucket in a design discussion.
+The three-way split above (universal pattern / universal personality / app-specific context) predates tool use, guardrails, sentiment detection, and long-term memory being built. All four are real, shipped subsystems today (see the sections above), and none of them were ever explicitly assigned to either the "universal" or "app-specific" bucket in a design discussion — until now.
 
-Plausible arguments exist for putting each of them on either side: tool-calling *as a mechanism* (define tools, execute, feed results back) looks universal, but *which* tools exist is obviously app-specific — same tension applies to guardrails (the pre-LLM filter pattern vs. the fitness-specific topic list and redirect copy), sentiment (the detector itself is domain-agnostic text analysis; the prompt injection it produces isn't), and memory (summarization mechanics are generic; the extraction prompt is wellness-specific).
+**Decision:** all four subsystems split the same way, mechanism vs. content:
 
-**This rewrite deliberately does not decide this.** Categorizing these four subsystems is a real design decision for whoever scopes the next adapter package (`@aria/core` vs. `@aria/adapter-fitness`), and it should be made deliberately, not inherited by default from wherever the code happens to live today. Flag it explicitly in that scoping conversation rather than assuming the existing file layout already reflects the right split.
+| Subsystem | `@aria/core` gets | `@aria/adapter-fitness` gets |
+|---|---|---|
+| Tool-calling | Generic define/execute/feed-results-back-to-LLM loop | The 8 fitness tool definitions (`log_water`, `get_weekly_stats`, etc.) |
+| Guardrails | The pre-LLM off-topic filter mechanism (short-message bypass, wellness-keyword override) | The 7 fitness off-topic categories and redirect copy |
+| Sentiment | The domain-agnostic text-analysis detector | The prompt-injection wording built from its output |
+| Long-term memory | Trigger/dedup/summarize-after-N-messages mechanics | The wellness-specific extraction prompt |
+
+This is the working default for `@aria/adapter-fitness` design going forward — no longer an open question to re-litigate per subsystem, though a specific subsystem's split can still be revisited if adapter design surfaces a reason to.
 
 ### Proposed Package Structure
 
@@ -1342,8 +1349,8 @@ Plausible arguments exist for putting each of them on either side: tool-calling 
 ├── context-provider.ts              # buildAriaContext() for fitness data
 ├── prompt-config.ts                 # Fitness expertise, health rules, data injection
 ├── fallback-responses.ts            # Workout/nutrition/sleep keyword responses
-├── tools.ts                         # log_water / log_mood / get_* fitness tools — see Open Design Question above
-├── guardrails.ts                    # Fitness-flavored off-topic categories & redirects
+├── tools.ts                         # log_water / log_mood / get_* fitness tool definitions (execution loop lives in core)
+├── guardrails.ts                    # Fitness-flavored off-topic categories & redirects (filter mechanism lives in core)
 └── index.ts
 
 @aria/adapter-meditation/            # Hypothetical meditation app adapter
@@ -1428,9 +1435,10 @@ You are warm, knowledgeable, encouraging, and culturally aware.
 `;
 
 // This stays the same across ALL apps.
-// What changes per app: expertise, rules, context injection —
-// and (per the Open Design Question above) possibly tools, guardrails,
-// sentiment prompt copy, and memory extraction prompts too.
+// What changes per app: expertise, rules, context injection,
+// tool definitions, guardrail topic lists/copy, sentiment prompt
+// wording, and memory extraction prompts (see Design Decision above —
+// each subsystem's mechanism lives in core, its content lives per-adapter).
 ```
 
 #### Usage in a New App
