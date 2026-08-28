@@ -201,6 +201,10 @@ export class ChatEngine<TContext> {
         toolResults = await Promise.all(
           response.toolCalls.map(async (call) => {
             const result = await this.deps.toolRegistry.execute(userId, call.name, call.arguments);
+            // Invalidate even when the tool call failed: a handler can throw AFTER a successful write
+            // (e.g. insert succeeds, a follow-up read then throws), so success===true is not a safe
+            // gate — skipping invalidation on failure risks serving stale cached context, which is
+            // worse than one extra rebuild.
             if (definitionsByName.get(call.name)?.mutatesContext) {
               this.deps.contextProvider.invalidate(userId).catch(() => {});
             }

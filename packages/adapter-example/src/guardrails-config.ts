@@ -10,5 +10,4 @@ export const exampleGuardrails = new GuardrailFilter({
     },
   ],
   overridePattern: /\b(habit|streak|check.?in|routine)\b/i,
-  defaultRedirectMessage: "That's outside what I help with — habits and daily check-ins are my thing!",
 });

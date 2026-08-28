@@ -55,12 +55,15 @@ class InMemoryFitnessMemoryStore implements AriaMemoryStore {
 
 export function createFitnessMemory(
   historyStore: AriaHistoryStore,
-  summarizerProvider: LLMProvider
+  summarizerProvider: LLMProvider,
+  onError: (params: { userId: string; error: Error }) => void = (params) =>
+    console.warn(`[ARIA Memory] Summarization error for ${params.userId}:`, params.error.message)
 ): MemoryManager {
   return new MemoryManager({
     extractionPrompt: EXTRACTION_PROMPT,
     summarizerProvider,
     historyStore,
     memoryStore: new InMemoryFitnessMemoryStore(historyStore),
+    onError,
   });
 }

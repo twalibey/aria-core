@@ -29,6 +29,9 @@ export { fitnessFallbackTopics, FITNESS_DEFAULT_FALLBACK } from './fallback-resp
 // A trivial in-memory FitnessDataStore for the standalone-proof deployment
 // this package targets — see docs/superpowers/specs/2026-08-28-aria-adapter-fitness-design.md.
 function createInMemoryDataStore(): FitnessDataStore {
+  // Writes are captured here for inspection only — the read methods below (getWeeklyStats, etc.)
+  // return fixed stub data and do not aggregate these logs. This store has no aggregation logic
+  // by design (standalone proof, not a real backend).
   const hydration: { userId: string; cups: number }[] = [];
   const mood: { userId: string; moodRating: number; energyRating: number; stressLevel: number; note: string | null }[] = [];
   return {

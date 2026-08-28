@@ -18,7 +18,9 @@ class InMemoryMemoryStore implements AriaMemoryStore {
   }
 
   async getMemories(userId: string, limit: number): Promise<AriaMemoryEntry[]> {
-    return (this.memories.get(userId) ?? []).slice(-limit);
+    return [...(this.memories.get(userId) ?? [])]
+      .sort((a, b) => b.sourceDate.getTime() - a.sourceDate.getTime())
+      .slice(0, limit);
   }
 
   async getAllMemoryContents(userId: string): Promise<string[]> {
@@ -35,7 +37,9 @@ class InMemoryMemoryStore implements AriaMemoryStore {
 
 export function createExampleMemory(
   historyStore: AriaHistoryStore,
-  summarizerProvider: LLMProvider
+  summarizerProvider: LLMProvider,
+  onError: (params: { userId: string; error: Error }) => void = (params) =>
+    console.warn(`[ARIA Memory] Summarization error for ${params.userId}:`, params.error.message)
 ): MemoryManager {
   return new MemoryManager({
     extractionPrompt:
@@ -43,5 +47,6 @@ export function createExampleMemory(
     summarizerProvider,
     historyStore,
     memoryStore: new InMemoryMemoryStore(historyStore),
+    onError,
   });
 }

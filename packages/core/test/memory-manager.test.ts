@@ -135,6 +135,31 @@ describe('MemoryManager.maybeSummarize', () => {
     expect(seen[0].userId).toBe('u1');
   });
 
+  it('routes a JSON.parse failure to onError and saves nothing', async () => {
+    const historyStore = new InMemoryHistoryStore();
+    await seedMessages(historyStore, 'u1', 10);
+    const memoryStore = makeMemoryStore();
+    const summarizerProvider: LLMProvider = {
+      async call() {
+        return { content: '```json\n[{"type": "goal", "content": "malformed"}]\n```' };
+      },
+    };
+    const seen: { userId: string; error: Error }[] = [];
+    const manager = new MemoryManager({
+      extractionPrompt: 'x',
+      summarizerProvider,
+      historyStore,
+      memoryStore,
+      onError: (params) => seen.push(params),
+    });
+
+    await manager.maybeSummarize('u1');
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].userId).toBe('u1');
+    expect(memoryStore.saved).toHaveLength(0);
+  });
+
   it('guards against overlapping calls for the same user', async () => {
     const historyStore = new InMemoryHistoryStore();
     await seedMessages(historyStore, 'u1', 10);

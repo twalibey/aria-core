@@ -57,6 +57,4 @@ export const fitnessGuardrails = new GuardrailFilter({
   ],
   overridePattern:
     /\b(workout|exercise|training|nutrition|diet|meal|sleep|rest|recovery|stretch|yoga|muscle|cardio|protein|calories|hydrat|wellness|fitness|health|body|weight|fat|lean|soreness|pain|injury|stress|anxiety|mood|energy|mindset|breathe|breathing|meditation)\b/i,
-  defaultRedirectMessage:
-    "That's a bit outside my wheelhouse! I'm best at helping with fitness, nutrition, sleep, recovery, and mindset. What wellness topic can I help with?",
 });
