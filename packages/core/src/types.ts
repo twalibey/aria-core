@@ -143,3 +143,25 @@ export interface SentimentHint {
   energy: 'high' | 'medium' | 'low';
   intent: 'question' | 'venting' | 'celebration' | 'request' | 'greeting' | 'unknown';
 }
+
+// ============================================================
+// Memory
+// ============================================================
+
+export interface AriaMemoryEntry {
+  memoryType: 'conversation_summary' | 'user_preference' | 'goal' | 'concern';
+  content: string;
+  sourceDate: Date;
+}
+
+export interface AriaMemoryStore {
+  /** Count of messages strictly after `since` — mirrors the real app's created_at-based gate. */
+  countMessagesSince(userId: string, since: Date): Promise<number>;
+  /** Timestamp the most recent memory was saved, or null if none exists. Used only for the gate. */
+  getLastSummarizedAt(userId: string): Promise<Date | null>;
+  /** Up to `limit` memories, ordered by sourceDate descending. Used only for retrieval/display. */
+  getMemories(userId: string, limit: number): Promise<AriaMemoryEntry[]>;
+  /** ALL memory contents for this user, unlimited — used only for dedup, matching the real app's unlimited dedup query. */
+  getAllMemoryContents(userId: string): Promise<string[]>;
+  saveMemory(userId: string, entry: AriaMemoryEntry): Promise<void>;
+}
