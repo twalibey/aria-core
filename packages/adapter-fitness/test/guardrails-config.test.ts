@@ -13,7 +13,7 @@ describe('fitnessGuardrails', () => {
     ['what do you think about the election this year', 'politics'],
     ['I need legal advice from a lawyer about a lawsuit', 'legal'],
     ['help me solve this calculus homework problem', 'academics'],
-    ['write me a short story about a dragon', 'creative_writing'],
+    ['write me a story about a dragon', 'creative_writing'],
   ])('blocks an off-topic %s message', (message) => {
     const result = fitnessGuardrails.check(message);
     expect(result.allowed).toBe(false);

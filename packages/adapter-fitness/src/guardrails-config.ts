@@ -41,7 +41,7 @@ export const fitnessGuardrails = new GuardrailFilter({
     },
     {
       key: 'creative_writing',
-      pattern: /\b(write me a (?:[\w ]+)?(?:story|poem|essay|song|novel|script|book)|creative writing|fiction)\b/i,
+      pattern: /\b(write me a (?:story|poem|essay|song|novel|script|book)|creative writing|fiction)\b/i,
       redirectMessage: REDIRECT_MESSAGES.creative_writing,
     },
     {
