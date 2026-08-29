@@ -18,6 +18,14 @@ const VALID_MEMORY_TYPES: AriaMemoryEntry['memoryType'][] = [
   'concern',
 ];
 
+const MARKDOWN_FENCE_RE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
+
+function stripMarkdownFence(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(MARKDOWN_FENCE_RE);
+  return match ? match[1].trim() : trimmed;
+}
+
 export class MemoryManager {
   private extractionPrompt: string;
   private summarizerProvider: LLMProvider;
@@ -60,7 +68,10 @@ export class MemoryManager {
         messages: [{ role: 'user', content: conversationText }],
       });
 
-      const extracted = JSON.parse(response.content) as { type: string; content: string }[];
+      const extracted = JSON.parse(stripMarkdownFence(response.content)) as {
+        type: string;
+        content: string;
+      }[];
       if (!Array.isArray(extracted) || extracted.length === 0) return;
 
       const existingContents = new Set(
