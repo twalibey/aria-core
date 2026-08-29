@@ -172,7 +172,11 @@ export class ChatEngine<TContext> {
         systemPrompt += this.deps.sentiment.buildPromptSection(this.deps.sentiment.detect(currentContent));
       }
       if (this.deps.memory) {
-        systemPrompt += await this.deps.memory.buildMemoryPromptSection(userId);
+        try {
+          systemPrompt += await this.deps.memory.buildMemoryPromptSection(userId);
+        } catch (err) {
+          this.reportError(userId, 'llm', err);
+        }
       }
 
       const tools = this.deps.toolRegistry.getDefinitions();

@@ -27,6 +27,9 @@ class InMemoryFitnessMemoryStore implements AriaMemoryStore {
 
   async countMessagesSince(userId: string, since: Date): Promise<number> {
     // Count messages STRICTLY after `since`, not including messages at the same instant
+    // 1000 is a practical upper bound for the gating check below, not a real limit — a user with
+    // more unsummarized messages than this would be undercounted, but that's an acceptable edge
+    // case for an in-memory demo store.
     const messages = await this.historyStore.getRecentMessages(userId, 1000);
     return messages.filter((m) => m.createdAt > since).length;
   }

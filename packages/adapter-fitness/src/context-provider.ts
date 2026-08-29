@@ -45,7 +45,16 @@ export class FitnessContextProvider implements AriaContextProvider<FitnessContex
   private cache = new Map<string, FitnessContext>();
 
   async buildContext(userId: string): Promise<FitnessContext> {
-    return MOCK_USERS[userId] ?? DEFAULT_CONTEXT;
+    const source = MOCK_USERS[userId] ?? DEFAULT_CONTEXT;
+    return {
+      profile: { ...source.profile },
+      health: {
+        ...source.health,
+        limitations: [...source.health.limitations],
+        allergies: [...source.health.allergies],
+        equipmentAvailable: [...source.health.equipmentAvailable],
+      },
+    };
   }
 
   async getCachedContext(userId: string): Promise<FitnessContext | null> {

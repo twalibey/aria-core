@@ -407,6 +407,21 @@ describe('ChatEngine.sendMessage — memory', () => {
     expect(summarizeStarted).toBe(true);
     releaseSummarize();
   });
+
+  it('does not fall back to the fallback engine when the memory read side throws', async () => {
+    const llmProvider = makeStubProvider([{ content: 'Hi Sam!' }]);
+    const memory = {
+      maybeSummarize: async () => {},
+      buildMemoryPromptSection: async () => {
+        throw new Error('memory store down');
+      },
+    } as unknown as MemoryManager;
+    const { engine } = buildEngine({ llmProvider, memory });
+
+    const result = await engine.sendMessage('u1', 'Hello', 'free');
+
+    expect(result.ariaMessage.content).toBe('Hi Sam!');
+  });
 });
 
 describe('ChatEngine.sendMessage — mutatesContext cache invalidation', () => {

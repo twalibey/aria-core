@@ -27,7 +27,7 @@ describe('fitnessSentiment', () => {
     expect(fitnessSentiment.buildPromptSection(hint)).toContain('Listen first');
   });
 
-  it('returns an empty prompt section for neutral sentiment', () => {
+  it('does not include the distress warning when sentiment is neutral', () => {
     const hint = fitnessSentiment.detect('what time should I work out today');
     expect(fitnessSentiment.buildPromptSection(hint)).not.toContain('IMPORTANT');
   });
