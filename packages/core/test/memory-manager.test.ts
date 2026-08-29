@@ -141,7 +141,7 @@ describe('MemoryManager.maybeSummarize', () => {
     const memoryStore = makeMemoryStore();
     const summarizerProvider: LLMProvider = {
       async call() {
-        return { content: '```json\n[{"type": "goal", "content": "malformed"}]\n```' };
+        return { content: '{"type": "goal", "content": "unterminated' };
       },
     };
     const seen: { userId: string; error: Error }[] = [];
@@ -158,6 +158,23 @@ describe('MemoryManager.maybeSummarize', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].userId).toBe('u1');
     expect(memoryStore.saved).toHaveLength(0);
+  });
+
+  it('strips a markdown code fence around the LLM response before parsing', async () => {
+    const historyStore = new InMemoryHistoryStore();
+    await seedMessages(historyStore, 'u1', 10);
+    const memoryStore = makeMemoryStore();
+    const summarizerProvider: LLMProvider = {
+      async call() {
+        return { content: '```json\n[{"type": "goal", "content": "Training for a 10k"}]\n```' };
+      },
+    };
+    const manager = new MemoryManager({ extractionPrompt: 'x', summarizerProvider, historyStore, memoryStore });
+
+    await manager.maybeSummarize('u1');
+
+    expect(memoryStore.saved).toHaveLength(1);
+    expect(memoryStore.saved[0]).toMatchObject({ memoryType: 'goal', content: 'Training for a 10k' });
   });
 
   it('guards against overlapping calls for the same user', async () => {
