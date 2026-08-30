@@ -19,7 +19,8 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\""
+    "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\"",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
@@ -27,6 +28,7 @@
     "openai": "^6.49.0"
   },
   "devDependencies": {
-    "tsup": "^8.5.1"
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2"
   }
 }
