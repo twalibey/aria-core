@@ -168,4 +168,23 @@ describe('QuerySpecExecutor', () => {
       error: "I couldn't safely answer that — try rephrasing your question.",
     });
   });
+
+  it('never surfaces a raw error even when the security audit log itself fails during a legitimate violation path', async () => {
+    const store = vi.fn().mockRejectedValue(new Error('audit log DB write failed'));
+    const onCriticalViolation = vi.fn();
+    const log = new SecurityAuditLog({ store, onCriticalViolation });
+    const runner = vi.fn();
+    const executor = new QuerySpecExecutor({ whitelist: makeWhitelist(), runner, securityAuditLog: log });
+
+    const result = await executor.execute(
+      { table: 'internal_secrets', columns: ['id'] },
+      { tenantId: 'tenant-1' }
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "I couldn't safely answer that — try rephrasing your question.",
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
 });
