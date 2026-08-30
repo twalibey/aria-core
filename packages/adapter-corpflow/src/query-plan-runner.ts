@@ -90,7 +90,11 @@ export function createDrizzleQueryPlanRunner(db: DrizzleQueryable): QueryPlanRun
     }
 
     const whereClause = db.select(fields).from(plan.tableRef).where(condition);
-    const ordered = plan.sort
+    // Ordering a single aggregate row is meaningless (and Postgres rejects an ORDER BY
+    // referencing a column that isn't part of the aggregate/GROUP BY, e.g.
+    // `select sum("amount") ... order by "id" desc` errors with 42803) — skip .orderBy()
+    // whenever aggregation is set, even if the descriptor also asked for a sort.
+    const ordered = plan.sort && !plan.aggregation
       ? whereClause.orderBy(plan.sort.direction === 'desc' ? desc(plan.sort.ref as any) : asc(plan.sort.ref as any))
       : whereClause;
 

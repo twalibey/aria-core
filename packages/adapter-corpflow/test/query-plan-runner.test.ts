@@ -206,4 +206,34 @@ describe('createDrizzleQueryPlanRunner', () => {
     expect(select).toHaveBeenCalledWith({ [MALFORMED_PLAN_FALLBACK_KEY]: tenantColumn });
     expect(limit).toHaveBeenCalledWith(100);
   });
+
+  it('skips .orderBy() when aggregation is set, even if sort is also set, but still applies .limit()', async () => {
+    // Ordering a single aggregate row is meaningless, and Postgres actively rejects an
+    // ORDER BY on a column that isn't part of the aggregate/GROUP BY (42803). A descriptor
+    // combining aggregation + sort (e.g. "how many invoices this month, newest first")
+    // must not attempt .orderBy() at all.
+    const tenantColumn = { name: 'tenant_id' } as any;
+    const amountRef = { name: 'amount' } as any;
+    const idRef = { name: 'id' } as any;
+    const { db, select, orderBy, limit } = makeDb([{ [AGGREGATION_RESULT_KEY]: 3 }]);
+
+    const runner = createDrizzleQueryPlanRunner(db as any);
+    const plan: ResolvedQueryPlan = {
+      table: 'documents',
+      tableRef: { name: 'documents' } as any,
+      columns: [],
+      filters: [],
+      tenantFilter: { ref: tenantColumn, value: 'tenant-1' },
+      aggregation: { fn: 'count', ref: amountRef },
+      sort: { ref: idRef, direction: 'desc' },
+      limit: 100,
+    };
+
+    const rows = await runner(plan);
+
+    expect(select).toHaveBeenCalledWith({ [AGGREGATION_RESULT_KEY]: count(amountRef) });
+    expect(orderBy).not.toHaveBeenCalled();
+    expect(limit).toHaveBeenCalledWith(100);
+    expect(rows).toEqual([{ [AGGREGATION_RESULT_KEY]: 3 }]);
+  });
 });
