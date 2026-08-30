@@ -51,17 +51,42 @@ Root `npm test` and `npm run typecheck` do this automatically via `pretest` / `p
 
 ## Versioning & Distribution
 
-This package is not published to a registry. Consuming apps outside this monorepo should pin it via a git-tag dependency:
+This package is not published to a registry, and this repo (`aria-core`) is an npm-workspaces monorepo — the repo root itself is **not** installable as a dependency (its `package.json` has no `main`/`exports`, and the real packages live under `packages/*`). Installing `github:twalibey/aria-core#<tag>` directly would clone the whole monorepo root into `node_modules`, which Node cannot resolve anything from.
+
+Instead, each publishable package (`@aria/core`, `@aria/adapter-corpflow`, and any future adapter meant for external consumption) gets its own **per-package release branch**, cut via `git subtree split`, so that package's own directory becomes the root of that branch:
+
+```bash
+git subtree split --prefix=packages/core -b release-core
+git tag core-v0.1.0 release-core
+
+git subtree split --prefix=packages/adapter-corpflow -b release-adapter-corpflow
+git tag adapter-corpflow-v0.1.0 release-adapter-corpflow
+```
+
+A consuming app pins each package to its own `<package>-vX.Y.Z` tag, not a shared repo-wide tag:
 
 ```json
 {
   "dependencies": {
-    "@aria/core": "github:<you>/aria#v0.1.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.1.0",
+    "@aria/adapter-corpflow": "github:twalibey/aria-core#adapter-corpflow-v0.1.0"
   }
 }
 ```
 
-Never depend on a floating branch (e.g. `#main`) — a change made for one consuming app would silently change behavior for every other app pinned the same way. Releases are tagged with semver; a breaking interface change bumps the major version.
+Never depend on a floating branch (e.g. `#main` or the raw `#release-core` branch itself) — pin to the tag. A change made for one consuming app would otherwise silently change behavior for every other app pinned the same way. Releases are tagged with semver; a breaking interface change bumps the major version.
+
+Cutting a new release means re-running the subtree split against the desired commit and creating a new tag — this is currently a manual step (a future improvement could script it). Each package's release branch is independent: bumping `core-vX` does not require re-cutting `adapter-corpflow-vX`, except when adapter-corpflow's own code or its `@aria/core` devDependency pin actually needs to change.
+
+### Local package.json changes needed for git-tag installs
+
+Any *new* publishable package added to this monorepo in the future must, in its own directory:
+
+- Have a standalone-buildable `tsconfig.json` — inline the shared compiler options directly rather than `"extends"`-ing anything outside the package's own directory (e.g. `../../tsconfig.base.json`). Once the package becomes the root of a subtree-split release branch, nothing outside that directory exists anymore.
+- Declare its own build-tool `devDependencies` (e.g. `typescript`, `tsup`) rather than relying on the monorepo root's hoisted versions — a standalone install of just one package won't have those hoisted.
+- Add a `"prepare": "npm run build"` script alongside its `build` script — `prepare` is what npm runs automatically right after installing a git dependency, and it's what makes the package self-building on install with no monorepo context required.
+
+Skipping any of these hits the exact resolution failure (`main`/`exports`/`dist` not resolving, or a hoisted-only build tool missing) that this mechanism exists to avoid.
 
 ## Deployment Requirement: Per-App API Keys
 
