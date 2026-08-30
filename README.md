@@ -56,12 +56,15 @@ This package is not published to a registry. Consuming apps outside this monorep
 ```json
 {
   "dependencies": {
-    "@aria/core": "github:<you>/aria#v0.1.0"
+    "@aria/core": "github:twalibey/aria-core#v0.1.0",
+    "@aria/adapter-corpflow": "github:twalibey/aria-core#v0.1.0"
   }
 }
 ```
 
 Never depend on a floating branch (e.g. `#main`) — a change made for one consuming app would silently change behavior for every other app pinned the same way. Releases are tagged with semver; a breaking interface change bumps the major version.
+
+Tags are cut from whatever commit is ready for external consumption, not necessarily `main` — e.g. `v0.1.0` was cut mid-development from the `worktree-aria-corpflow-tenant-scoping` branch (Tasks 1-8 of the CorpFlow tenant-scoping plan) so CorpFlow could start consuming `@aria/adapter-corpflow` before that work merged to `main`. Consuming apps should always repin to a new tag once the underlying feature branch merges, rather than staying on a pre-merge tag indefinitely.
 
 ## Deployment Requirement: Per-App API Keys
 
