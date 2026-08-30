@@ -22,3 +22,5 @@ As of `v0.2.0`, `createDrizzleQueryPlanRunner` genuinely enforces the whitelist-
 - Test coverage for the query-plan runner is mock-based only, with no real-Drizzle SQL-rendering test (RISK-004 item 6).
 - The `count` aggregation counts non-null values of a column, not rows — fine today, but worth checking if the whitelist is extended to a nullable column (RISK-004 item 7).
 - The tenant-scoping-violation Slack alert has no severity tiering, creating alert-fatigue risk (RISK-004 item 8).
+
+**Live smoke test:** run/not yet run — see scripts/live-tenant-scoping-smoke-test.ts. Do not consider this sub-project fully validated until this has been run against a real model at least once.
