@@ -57,10 +57,10 @@ Instead, each publishable package (`@aria/core`, `@aria/adapter-corpflow`, and a
 
 ```bash
 git subtree split --prefix=packages/core -b release-core
-git tag core-v0.1.0 release-core
+git tag core-v0.2.0 release-core
 
 git subtree split --prefix=packages/adapter-corpflow -b release-adapter-corpflow
-git tag adapter-corpflow-v0.1.0 release-adapter-corpflow
+git tag adapter-corpflow-v0.2.0 release-adapter-corpflow
 ```
 
 A consuming app pins each package to its own `<package>-vX.Y.Z` tag, not a shared repo-wide tag:
@@ -68,8 +68,8 @@ A consuming app pins each package to its own `<package>-vX.Y.Z` tag, not a share
 ```json
 {
   "dependencies": {
-    "@aria/core": "github:twalibey/aria-core#core-v0.1.0",
-    "@aria/adapter-corpflow": "github:twalibey/aria-core#adapter-corpflow-v0.1.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.2.0",
+    "@aria/adapter-corpflow": "github:twalibey/aria-core#adapter-corpflow-v0.2.0"
   }
 }
 ```
