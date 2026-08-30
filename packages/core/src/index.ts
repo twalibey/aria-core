@@ -21,3 +21,5 @@ export { MemoryManager } from './memory-manager.js';
 export type { MemoryManagerConfig } from './memory-manager.js';
 export { SecurityAuditLog } from './security-audit-log.js';
 export type { SecurityAuditLogConfig } from './security-audit-log.js';
+export { QuerySpecExecutor } from './query-spec-executor.js';
+export type { QuerySpecExecutorConfig } from './query-spec-executor.js';
