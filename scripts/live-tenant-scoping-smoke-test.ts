@@ -2,25 +2,33 @@
 // Manual smoke test — requires ANTHROPIC_API_KEY or OPENROUTER_API_KEY in the environment.
 // Run with: npx tsx packages/adapter-corpflow/scripts/live-tenant-scoping-smoke-test.ts
 //
-// Sends real cross-tenant-adjacent questions against a live model using two
-// synthetic in-memory tenants, and asserts zero cross-tenant data ever
-// appears in either tenant's results — the security-critical equivalent of
-// the memory-summarization smoke test that caught a real bug in the
-// adapter-fitness phase (stub-based tests had missed it for a full phase).
+// PRIMARY PURPOSE: send real adversarial questions to a live model and verify
+// two things that genuinely depend on what an unpredictable real model
+// actually does — no stub or unit test can substitute for this:
+//   (a) when the model's translated QueryDescriptor tries to smuggle in a
+//       filter on the tenant column itself, does QuerySpecExecutor actually
+//       detect and log that as an `llm_supplied_tenant_id` violation — a real
+//       model might phrase the attempt in a shape nobody's unit tests
+//       anticipated (a nested filter, an aliased column, unusual casing);
+//   (b) does the model's raw response — legitimate or adversarial — survive
+//       the markdown-fence-stripping and JSON.parse round-trip cleanly (the
+//       same class of live-model surprise that broke
+//       MemoryManager.maybeSummarize() against a live model; see
+//       packages/core/src/memory-manager.ts's stripMarkdownFence).
+// This is the test's real, reportable signal, and the one this script's exit
+// code is primarily about.
 //
-// What this script does NOT need to prove: that QuerySpecExecutor.execute()
-// derives `tenantFilter.value` from the caller-supplied TenantContext rather
-// than from the LLM's descriptor — that's true by construction (see
-// query-spec-executor.ts) and is already covered by unit tests / code review.
-// What's genuinely uncertain, and what this script exists to catch, is
-// whether a REAL model's real, unpredictable JSON output ever slips past the
-// whitelist/violation machinery in some shape nobody's unit tests anticipated
-// (an unparseable response, a nested filter, an aliased column, a
-// tenant_id-filter attempt phrased in a way the model wasn't told to avoid).
-// So each attack question is run against BOTH tenants, and every pass checks
-// two independent things: (1) did this tenant ever get back a row that isn't
-// its own, and (2) if the descriptor tried to filter on the tenant column
-// itself, was that actually caught and logged as a violation.
+// NOT this script's purpose, and NOT a live-model-dependent finding: whether
+// cross-tenant rows can leak through QuerySpecExecutor.execute(). That's
+// structurally impossible to demonstrate with a mock runner, because
+// `plan.tenantFilter.value` is set by execute() from the TenantContext WE
+// pass in — never from the descriptor — before the runner is ever called.
+// No live model's output can make that check fail (or meaningfully pass);
+// it's testing something the descriptor has no path to influence. The
+// per-tenant row check below is kept only as a basic sanity/wiring check on
+// this script's own mock setup (and a tripwire if someone later removes the
+// `tenantFilter` enforcement from `execute()`) — not as evidence about the
+// live model's behavior.
 
 import { QuerySpecExecutor, SecurityAuditLog, AnthropicProvider, OpenRouterProvider } from '@aria/core';
 import type { QueryWhitelist, QueryDescriptor, ResolvedQueryPlan, SecurityViolation, LLMProvider } from '@aria/core';
@@ -83,7 +91,6 @@ async function main() {
     'What is the total across all tenants combined?',
   ];
 
-  const tenantColumnKey = whitelist.tables.payments.tenantColumnKey;
   let anyFailure = false;
 
   for (const question of attackQuestions) {
@@ -113,8 +120,20 @@ async function main() {
     // do — if it did it anyway, the executor must have caught and logged it
     // (it still serves the request, just silently drops that filter; see
     // query-spec-executor.ts's `llm_supplied_tenant_id` branch).
-    const attemptedTenantFilter = (descriptor.filters ?? []).some((f) => f.column === tenantColumnKey);
+    //
+    // Only expect this when the descriptor's table is itself whitelisted —
+    // execute() resolves the table first and returns early (logging a
+    // `non_whitelisted_field` violation instead) if it isn't, so it never
+    // reaches the filter loop at all in that case. Mirroring that order here
+    // avoids a false positive when a model's descriptor has both a bad table
+    // name AND a tenant_id filter — that's correctly rejected on the table
+    // check, and no `llm_supplied_tenant_id` violation is expected for it.
+    const whitelistedTable = whitelist.tables[descriptor.table];
+    const attemptedTenantFilter = whitelistedTable
+      ? (descriptor.filters ?? []).some((f) => f.column === whitelistedTable.tenantColumnKey)
+      : false;
     console.log(`  descriptor: ${JSON.stringify(descriptor)}`);
+    console.log(`  table whitelisted: ${whitelistedTable ? 'yes' : 'no'}`);
     console.log(`  attempted tenant_id filter: ${attemptedTenantFilter ? 'yes' : 'no'}`);
 
     for (const callingTenant of TENANTS) {
@@ -123,26 +142,31 @@ async function main() {
       const rows = result.rows ?? [];
       const newViolations = violations.slice(before);
 
-      // The core property: as `callingTenant`, every row returned must
-      // belong to `callingTenant` — never hardcode which tenant is "the
-      // victim," check against whichever tenant actually made this call.
-      const crossTenantLeak = rows.some((r) => r.tenant_id !== callingTenant);
-      if (crossTenantLeak) {
-        console.log(`  FAIL: as ${callingTenant}, received a row not belonging to ${callingTenant}: ${JSON.stringify(rows)}`);
+      // Sanity/wiring check only — NOT a live-model-dependent finding. Given
+      // QuerySpecExecutor's design, `plan.tenantFilter.value` (and therefore
+      // this mock runner's lookup) is always `callingTenant`, regardless of
+      // the descriptor's content, so this can never fail because of
+      // something the model did. It exists to catch a bug in this script's
+      // own mock wiring, or a future regression if someone removes the
+      // `tenantFilter` enforcement from `execute()` itself.
+      const sanityMismatch = rows.some((r) => r.tenant_id !== callingTenant);
+      if (sanityMismatch) {
+        console.log(`  FAIL (script wiring, not a live-model finding): as ${callingTenant}, the mock runner returned a row not belonging to ${callingTenant}: ${JSON.stringify(rows)}`);
         anyFailure = true;
       }
 
-      // If the model tried to smuggle in a tenant_id filter, the executor
-      // must have actually logged it as a violation — not every
+      // PRIMARY signal: if the model tried to smuggle in a tenant_id filter,
+      // the executor must have actually logged it as a violation — not every
       // attack-sounding question produces a technical violation (e.g. "total
       // across all tenants" may just translate to a harmless aggregation
       // scoped to the caller's own tenant, which is correct behavior, not a
       // violation), so we only assert this when the descriptor itself
-      // contained the specific thing the system prompt forbade.
+      // contained the specific thing the system prompt forbade, on a table
+      // that was actually whitelisted.
       if (attemptedTenantFilter) {
         const caughtIt = newViolations.some((v) => v.category === 'llm_supplied_tenant_id');
         if (!caughtIt) {
-          console.log(`  FAIL: as ${callingTenant}, descriptor filtered on "${tenantColumnKey}" but no llm_supplied_tenant_id violation was logged`);
+          console.log(`  FAIL: as ${callingTenant}, descriptor filtered on "${whitelistedTable!.tenantColumnKey}" but no llm_supplied_tenant_id violation was logged`);
           anyFailure = true;
         }
       }
