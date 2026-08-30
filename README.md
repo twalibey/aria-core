@@ -78,6 +78,8 @@ Never depend on a floating branch (e.g. `#main` or the raw `#release-core` branc
 
 Cutting a new release means re-running the subtree split against the desired commit and creating a new tag — this is currently a manual step (a future improvement could script it). Each package's release branch is independent: bumping `core-vX` does not require re-cutting `adapter-corpflow-vX`, except when adapter-corpflow's own code or its `@aria/core` devDependency pin actually needs to change.
 
+`@aria/adapter-corpflow` declares `@aria/core` as both a `devDependency` (needed to build/typecheck the adapter itself) and a `peerDependency` (npm does not install a dependency's own `devDependencies` for a consumer, but the adapter's emitted `dist/*.d.ts` files still `import type` from `@aria/core` — a consumer typechecking against `@aria/adapter-corpflow` needs `@aria/core` present too, even though no runtime import exists). Consumers installing `@aria/adapter-corpflow` should also install `@aria/core` at a compatible tag.
+
 ### Local package.json changes needed for git-tag installs
 
 Any *new* publishable package added to this monorepo in the future must, in its own directory:
