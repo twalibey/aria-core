@@ -39,7 +39,7 @@ Any `tenantId`-shaped field arriving through an LLM tool-call argument or query 
 
 ### `ToolRegistry` — tenant-scoped mode
 
-Opt-in `tenantScoped: boolean`. When set, every tool's `execute(args, context)` receives `context.tenant` injected by the adapter's `ContextProvider`, matching Phase 1's existing wiring pattern — no new plumbing style. This path already had the strongest possible guarantee (typed function arguments, no composed SQL) and needed no further hardening after the red-team pass.
+**Corrected during planning to match `ToolRegistry`'s real existing signature** (`execute(userId, toolName, args)`, no context parameter today). `execute()` gains an optional 4th parameter, `tenant?: TenantContext`; `Tool.handler` gains an optional 3rd parameter of the same type — both additions are backward-compatible (existing two/three-argument callers and handlers in `adapter-fitness`/`adapter-example` remain valid). `ChatEngine.sendMessage()` gains a matching optional 4th parameter, threaded down to `toolRegistry.execute()`, so a caller resolves `TenantContext` fresh per call and passes it in — never cached on the engine instance. When a `SecurityAuditLog` is configured on the registry (tenant-scoped mode is opt-in via this, not a separate boolean), `execute()` also strips and logs any LLM-supplied `tenantId`-shaped argument before validation, and logs+fails if tenant-scoped mode is on but no `TenantContext` was passed. This path already had the strongest possible guarantee among the three (typed function arguments, no composed SQL) and needed no further hardening after the red-team pass — only this signature correction.
 
 ### `query-spec-executor.ts` — `QuerySpecExecutor`
 
@@ -47,11 +47,13 @@ Replaces an earlier draft's "adapter-supplied compiler function" design, removed
 
 **Designed to be usable standalone, not only from inside `ChatEngine`'s tool loop.** A planning-stage investigation found CorpFlow's ARIA doesn't call `@aria/core`'s `ChatEngine` at all today — `aria/message/route.ts` uses CorpFlow's own bespoke chat implementation directly. Migrating CorpFlow's full chat flow onto `ChatEngine` is separate, larger future work, not something this sub-project takes on silently. `nl-query` (this sub-project's real migration target, see Migration Scope below) is a one-shot analytics endpoint, not a conversational turn — it has no use for crisis filtering, topic guardrails, sentiment, or memory. So `QuerySpecExecutor` takes `(descriptor, context: TenantContext, whitelist: QueryWhitelist)` directly and can be called from any request handler; `ChatEngine`'s tool loop is one caller among possibly several, not a required wrapper.
 
-- Adapter supplies a `QueryWhitelist`: a map from `{table, column}` string keys to real, typed Drizzle column references, plus which aggregation functions (`count`/`sum`/`avg`) and which columns are sortable, per table. This is data, not code.
-- The LLM's query descriptor (`{ table, columns, filters, aggregation, sort, limit }`) may only reference tables/columns/aggregations by whitelist key. Core resolves each key to its real column reference via lookup — an LLM-supplied string is never concatenated into SQL, whitelisted or not.
-- Core builds the entire query itself using Drizzle's parameterized operators (`eq`, `and`, `gte`, `lte`, `inArray`, built-in aggregate helpers) for every clause, including the forced tenant predicate. There is no code path, adapter or core, where a value is string-interpolated into SQL.
-- The tenant predicate (`tenantId = context.tenant.tenantId`) is unconditionally ANDed onto the query as the outermost predicate by core, not by the adapter, and cannot be overridden or omitted by anything in the descriptor.
-- Any DB-level error during execution is caught and replaced with a generic failure before it reaches the LLM or the user — raw DB error text (which could reveal schema or cross-tenant data via an error-based leak) is never surfaced.
+**Corrected during planning: core stays ORM-agnostic, matching every other core interface (`LLMProvider`, `AriaHistoryStore`, `AriaMemoryStore`) — it never depends on Drizzle or any specific ORM.**
+
+- The adapter supplies a `QueryWhitelist`: opaque, adapter-defined column references (real Drizzle column objects for CorpFlow, but core never inspects their internals) keyed by `{table, column}` string, plus which aggregation functions (`count`/`sum`/`avg`) are allowed per table, which columns are sortable, and which whitelist key is that table's tenant-id column.
+- The LLM's query descriptor (`{ table, columns, filters, aggregation, sort, limit }`) may only reference tables/columns/aggregations by whitelist key — an LLM-supplied string is resolved through the whitelist lookup and never reaches any query-building code as a raw string.
+- Core validates the descriptor and produces a `ResolvedQueryPlan`: whitelist-resolved column references, typed filter values, and — as a **mandatory, separate, always-present field** (not merely first in an array a careless implementation could skip) — the tenant filter (whitelisted tenant-column ref + `context.tenantId`). This shape makes "forgot to apply the tenant filter" a type error for the adapter to write, not a possible oversight.
+- The adapter implements a thin `QueryPlanRunner(plan: ResolvedQueryPlan): Promise<Record<string, unknown>[]>` — the *only* piece of adapter code in this whole path, and it never sees an LLM-influenced string, only already-resolved refs and typed values. For CorpFlow, this is a few lines of Drizzle (`eq`/`and`/`gte`/etc.) applied to `plan`'s fields — small and easy to unit-test in isolation for "does it always apply `plan.tenantFilter`."
+- Any error thrown by `QueryPlanRunner` is caught and replaced with a generic failure before it reaches the LLM or the user — raw DB error text (which could reveal schema or cross-tenant data via an error-based leak) is never surfaced.
 
 ### `security-audit-log.ts` — `SecurityAuditLog`
 
@@ -69,22 +71,23 @@ Interface; adapter implements storage. Logs three violation categories: (1) a no
 4. `QuerySpecExecutor` validates every key against `QueryWhitelist`, builds the full parameterized query including the forced tenant predicate, executes, and returns either results or a generic failure — raw DB errors never surface.
 5. Any violation (non-whitelisted key, LLM-supplied tenant field) short-circuits to a logged rejection (via `SecurityAuditLog`, triggering `onCriticalViolation`) and a safe "I couldn't safely answer that" response — never a partial or unscoped result.
 
-**`ToolRegistry` tenant-scoped mode, for future use inside `ChatEngine.sendMessage()`** (not exercised by this sub-project's own deliverable, since CorpFlow's chat route doesn't call `ChatEngine` yet — documented here because the mechanism ships in `@aria/core` now and future pillars depend on it): `TenantContext` constructed fresh per invocation → each tool call executes with `context.tenant` injected server-side → any violation short-circuits the same way as above.
+**`ToolRegistry` tenant-scoped mode, for future use inside `ChatEngine.sendMessage()`** (not exercised by CorpFlow's own deliverable in this sub-project, since its chat route doesn't call `ChatEngine` yet — proven instead via a synthetic `@aria/adapter-example` tool, the same way Phase 1 proved new core mechanisms before a real adapter existed; documented here because the mechanism ships in `@aria/core` now and future pillars depend on it): caller resolves `TenantContext` fresh and passes it as `sendMessage()`'s 4th argument → threaded to `toolRegistry.execute(userId, name, args, tenant)` → each tool handler receives it as its 3rd argument → any violation short-circuits the same way as above.
 
 ## `@aria/adapter-corpflow` Package Contents (this sub-project's slice only)
 
 ```
 packages/adapter-corpflow/          # lives in this monorepo, git-tag-pinned dependency for CorpFlow (decided 2026-08-29)
 ├── src/
-│   ├── query-whitelist.ts          # {table, column} -> Drizzle column ref, per-table allowed aggregations/sorts
-│   ├── tools.ts                    # tenant-scoped tool definitions migrated from api/aria + api/ai routes
-│   ├── security-audit-log.ts       # SecurityAuditLog implementation + onCriticalViolation wiring
-│   └── index.ts                    # wires TenantContext, ToolRegistry, QuerySpecExecutor into a ChatEngine instance
+│   ├── nl-query-whitelist.ts       # QueryWhitelist for the 8 tables nl-query's real prompt already names
+│   ├── nl-query-runner.ts          # QueryPlanRunner implementation using Drizzle's eq/and/gte/etc.
+│   ├── security-audit-log.ts       # SecurityAuditLog implementation + notifyTenantScopingViolation wiring
+│   └── index.ts                    # wires TenantContext + QuerySpecExecutor for CorpFlow's nl-query route to call
 └── test/
-    ├── query-spec-executor.test.ts # adversarial suite, see Testing Strategy
-    ├── tools.test.ts
+    ├── nl-query-runner.test.ts     # asserts plan.tenantFilter is always applied, never overridable
     └── security-audit-log.test.ts
 ```
+
+This package intentionally does not include a `tools.ts` or a `ChatEngine` instance — see Migration Scope below for why only `nl-query` is touched in this sub-project.
 
 ## Migration Scope (closes a gap-analysis/red-team finding)
 
@@ -114,7 +117,7 @@ Recommended, not built here (would expand this sub-project into a whole-app migr
 
 ## Verification Note: why this design differs from the first version presented in chat
 
-The first version of this design gave `QuerySpecExecutor` an adapter-supplied "compiler function" that would turn an LLM-produced descriptor into a real query, with core forcibly ANDing a tenant predicate on top of whatever the adapter returned. A red-team pass found this reopened the same bug class the sub-project exists to close, one layer down: core's guarantee on the tenant predicate is real, but irrelevant if the adapter's compiler builds any other part of the query — a filter value, a sort key — via string interpolation, which is a common real-world gap in hand-rolled ORM code built under time pressure. The fix was architectural, not a stricter instruction to the adapter: remove the adapter's ability to write query-building *code* at all. It now supplies only inert whitelist *data*; core owns 100% of query construction using only parameterized operators. A gap-analysis pass separately found the original design had no real end-to-end consumer (all four CorpFlow pillars deferred content decisions past this sub-project), which risked shipping an unvalidated mechanism the same way this project's memory-summarization subsystem shipped unvalidated against a live model for a full phase — resolved by making the `nl-query` migration this sub-project's required proof, not a later nice-to-have.
+The first version of this design gave `QuerySpecExecutor` an adapter-supplied "compiler function" that would turn an LLM-produced descriptor into a real query, with core forcibly ANDing a tenant predicate on top of whatever the adapter returned. A red-team pass found this reopened the same bug class the sub-project exists to close, one layer down: core's guarantee on the tenant predicate is real, but irrelevant if the adapter's compiler builds any other part of the query — a filter value, a sort key — via string interpolation, which is a common real-world gap in hand-rolled ORM code built under time pressure. The fix was architectural, not a stricter instruction to the adapter: remove the adapter's ability to see or act on any LLM-influenced *string*. Core validates the descriptor and resolves it to a `ResolvedQueryPlan` of already-safe, already-typed values with the tenant filter as a mandatory top-level field; the adapter's only remaining code is a thin `QueryPlanRunner` that turns that already-safe plan into a real query using whatever ORM it likes — a much smaller, much more auditable surface than "compile an arbitrary descriptor." (A second correction, made during planning rather than the earlier red-team pass: the first post-red-team draft still had core calling Drizzle operators directly, which would have made `@aria/core` depend on a specific ORM — inconsistent with every other core interface, all of which are adapter-implemented. `QueryPlanRunner` fixes this the same way `AriaMemoryStore`/`AriaHistoryStore` already do for their own concerns.) A gap-analysis pass separately found the original design had no real end-to-end consumer (all four CorpFlow pillars deferred content decisions past this sub-project), which risked shipping an unvalidated mechanism the same way this project's memory-summarization subsystem shipped unvalidated against a live model for a full phase — resolved by making the `nl-query` migration this sub-project's required proof, not a later nice-to-have.
 
 ## Open Items Carried Into the Implementation Plan
 
