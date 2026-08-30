@@ -35,7 +35,7 @@ describe('adapter-example: tenant-scoping mechanism end-to-end', () => {
     const historyStore = new InMemoryHistoryStore();
     let callCount = 0;
     const llmProvider: LLMProvider = {
-      async call() {
+      async call(params) {
         callCount++;
         if (callCount === 1) {
           // First LLM call attempts to smuggle its own tenantId — must be
@@ -47,7 +47,9 @@ describe('adapter-example: tenant-scoping mechanism end-to-end', () => {
             ],
           };
         }
-        return { content: 'Your morning walk streak is 5 days!' };
+        // Second call: echo back the tool result to verify the handler received the real tenant
+        const lastMessage = params.messages[params.messages.length - 1];
+        return { content: lastMessage.content };
       },
     };
 
@@ -65,7 +67,10 @@ describe('adapter-example: tenant-scoping mechanism end-to-end', () => {
       tenantId: 'real-tenant',
     });
 
-    expect(result.ariaMessage.content).toBe('Your morning walk streak is 5 days!');
+    // Verify the handler received the real tenant (not the attacker-supplied one)
+    expect(result.ariaMessage.content).toContain('real-tenant');
+    expect(result.ariaMessage.content).not.toContain('attacker-tenant');
+    // Verify the violation was logged
     expect(store).toHaveBeenCalledWith(
       expect.objectContaining({ category: 'llm_supplied_tenant_id', tenantId: 'real-tenant' })
     );
