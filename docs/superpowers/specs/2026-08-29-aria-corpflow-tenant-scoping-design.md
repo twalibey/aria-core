@@ -69,7 +69,7 @@ Interface; adapter implements storage. Logs three violation categories: (1) a no
 ## `@aria/adapter-corpflow` Package Contents (this sub-project's slice only)
 
 ```
-packages/adapter-corpflow/          # location TBD — see Open Items
+packages/adapter-corpflow/          # lives in this monorepo, git-tag-pinned dependency for CorpFlow (decided 2026-08-29)
 ├── src/
 │   ├── query-whitelist.ts          # {table, column} -> Drizzle column ref, per-table allowed aggregations/sorts
 │   ├── tools.ts                    # tenant-scoped tool definitions migrated from api/aria + api/ai routes
@@ -115,7 +115,7 @@ The first version of this design gave `QuerySpecExecutor` an adapter-supplied "c
 
 ## Open Items Carried Into the Implementation Plan
 
-- **Package location undecided.** Whether `@aria/adapter-corpflow` lives in this monorepo (`packages/adapter-corpflow`, git-tag-pinned, matching Phase 1's versioning story) or inside the CorpFlow repo itself as a pinned dependency consumer was flagged during the original pivot decision and never resolved — needs a decision before or during planning, not a default.
+- **Package location: decided 2026-08-29.** `@aria/adapter-corpflow` lives in this monorepo (`packages/adapter-corpflow`), consumed by CorpFlow as a git-tag-pinned dependency — matching Phase 1's versioning story. Chosen specifically to keep the core/adapter boundary structurally enforced by a real repo separation, in service of `@aria/core` staying generic and reusable across apps rather than accumulating CorpFlow-specific assumptions.
 - **Full 21-route migration classification** (migrate-now / decommission / confirmed-no-tenant-data) is deferred to the plan, per the Migration Inventory section above.
 - **Multi-entity session verification** (RISK-004 item 3) should be checked against CorpFlow's real auth code early in planning, since it affects whether `TenantContext`'s single-`tenantId` shape is sufficient.
 - **Where `SecurityAuditLog`'s storage/alerting actually plugs into CorpFlow** (does CorpFlow have an existing alerting mechanism to wire `onCriticalViolation` into, or does one need to be built) needs confirming during planning.
