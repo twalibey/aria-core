@@ -28,9 +28,9 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "@aria/core": "github:twalibey/aria-core#core-v0.1.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.2.0"
   },
   "peerDependencies": {
-    "@aria/core": "github:twalibey/aria-core#core-v0.1.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.2.0"
   }
 }
