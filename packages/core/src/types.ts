@@ -86,9 +86,13 @@ export interface LLMProvider {
 // Tools
 // ============================================================
 
+export interface TenantContext {
+  tenantId: string;
+}
+
 export interface Tool<TArgs = Record<string, unknown>> {
   definition: ToolDefinition;
-  handler: (userId: string, args: TArgs) => Promise<string>;
+  handler: (userId: string, args: TArgs, tenant?: TenantContext) => Promise<string>;
 }
 
 export interface ToolExecutionResult {
@@ -167,4 +171,24 @@ export interface AriaMemoryStore {
   /** ALL memory contents for this user, unlimited — used only for dedup, matching the real app's unlimited dedup query. */
   getAllMemoryContents(userId: string): Promise<string[]>;
   saveMemory(userId: string, entry: AriaMemoryEntry): Promise<void>;
+}
+
+// ============================================================
+// Tenant scoping
+// ============================================================
+
+export type SecurityViolationCategory =
+  | 'non_whitelisted_field'
+  | 'llm_supplied_tenant_id'
+  | 'missing_tenant_context';
+
+export interface SecurityViolation {
+  category: SecurityViolationCategory;
+  detail: string;
+  tenantId?: string;
+}
+
+export interface SecurityAuditLogConfig {
+  store: (violation: SecurityViolation) => Promise<void>;
+  onCriticalViolation: (violation: SecurityViolation) => void | Promise<void>;
 }
