@@ -52,11 +52,11 @@ export class QuerySpecExecutor {
         return col.ref;
       };
 
-      const columnRefs: unknown[] = [];
+      const columnRefs: ResolvedQueryPlan['columns'] = [];
       for (const col of descriptor.columns) {
         const ref = await resolveColumn(col);
         if (ref === undefined) return { success: false, error: SAFE_FAILURE_MESSAGE };
-        columnRefs.push(ref);
+        columnRefs.push({ key: col, ref });
       }
 
       const filters: ResolvedQueryPlan['filters'] = [];

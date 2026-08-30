@@ -244,7 +244,8 @@ export interface ResolvedQueryPlan {
   table: string;
   /** Opaque table reference resolved from the whitelist — pass this to .from(), never `table`. */
   tableRef: unknown;
-  columns: unknown[];
+  /** Caller-facing whitelist key paired with its resolved opaque ref. The runner needs both to build a real field-selection map (e.g. `db.select({ [key]: ref, ... })`) — a bare ref list would lose the output column names. Core never inspects `ref`. */
+  columns: Array<{ key: string; ref: unknown }>;
   filters: ResolvedQueryFilter[];
   /** Always present, always applied by the runner — never optional, never overridable by the descriptor. */
   tenantFilter: { ref: unknown; value: string };
