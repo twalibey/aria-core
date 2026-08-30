@@ -45,6 +45,8 @@ Opt-in `tenantScoped: boolean`. When set, every tool's `execute(args, context)` 
 
 Replaces an earlier draft's "adapter-supplied compiler function" design, removed specifically because it reopened an injection class (see Verification Note below).
 
+**Designed to be usable standalone, not only from inside `ChatEngine`'s tool loop.** A planning-stage investigation found CorpFlow's ARIA doesn't call `@aria/core`'s `ChatEngine` at all today — `aria/message/route.ts` uses CorpFlow's own bespoke chat implementation directly. Migrating CorpFlow's full chat flow onto `ChatEngine` is separate, larger future work, not something this sub-project takes on silently. `nl-query` (this sub-project's real migration target, see Migration Scope below) is a one-shot analytics endpoint, not a conversational turn — it has no use for crisis filtering, topic guardrails, sentiment, or memory. So `QuerySpecExecutor` takes `(descriptor, context: TenantContext, whitelist: QueryWhitelist)` directly and can be called from any request handler; `ChatEngine`'s tool loop is one caller among possibly several, not a required wrapper.
+
 - Adapter supplies a `QueryWhitelist`: a map from `{table, column}` string keys to real, typed Drizzle column references, plus which aggregation functions (`count`/`sum`/`avg`) and which columns are sortable, per table. This is data, not code.
 - The LLM's query descriptor (`{ table, columns, filters, aggregation, sort, limit }`) may only reference tables/columns/aggregations by whitelist key. Core resolves each key to its real column reference via lookup — an LLM-supplied string is never concatenated into SQL, whitelisted or not.
 - Core builds the entire query itself using Drizzle's parameterized operators (`eq`, `and`, `gte`, `lte`, `inArray`, built-in aggregate helpers) for every clause, including the forced tenant predicate. There is no code path, adapter or core, where a value is string-interpolated into SQL.
@@ -57,14 +59,17 @@ Interface; adapter implements storage. Logs three violation categories: (1) a no
 
 **`onCriticalViolation` is a required constructor parameter, not optional.** This is a direct lesson from the adapter-fitness phase, where `MemoryManager.onError` being optional meant both reference adapters shipped without wiring it, making a broken subsystem silent. A security-relevant callback gets the stricter treatment: `SecurityAuditLog` cannot be constructed without it.
 
-## Data Flow in `ChatEngine.sendMessage()` (CorpFlow-specific additions)
+## Data Flow
 
-1–2. Rate-limit and crisis-filter checks (unchanged from Phase 1).
-3. `TenantContext` constructed fresh from session.
-4. Main LLM call with tool definitions (tenant-scoped tools) and/or the query-spec format described to the model.
-5. For each tool call: `ToolRegistry` executes with `context.tenant` injected server-side.
-6. For a query descriptor: `QuerySpecExecutor` validates every key against `QueryWhitelist`, builds the full parameterized query including the forced tenant predicate, executes, and returns either results or a generic failure.
-7. Any violation at step 5 or 6 short-circuits to a logged rejection (via `SecurityAuditLog`, triggering `onCriticalViolation`) and a safe "I can't answer that" response — never a partial or unscoped result.
+**`QuerySpecExecutor`, standalone (this sub-project's real path — `nl-query`'s replacement route):**
+
+1. Route calls `verifyAuth()` (unchanged, existing CorpFlow auth) to get `user.tenantId`.
+2. `TenantContext` constructed from `user.tenantId` — fresh per request, never cached.
+3. LLM call (via the adapter's provider, `aiJSON`-equivalent) produces a query descriptor referencing only `QueryWhitelist` keys.
+4. `QuerySpecExecutor` validates every key against `QueryWhitelist`, builds the full parameterized query including the forced tenant predicate, executes, and returns either results or a generic failure — raw DB errors never surface.
+5. Any violation (non-whitelisted key, LLM-supplied tenant field) short-circuits to a logged rejection (via `SecurityAuditLog`, triggering `onCriticalViolation`) and a safe "I couldn't safely answer that" response — never a partial or unscoped result.
+
+**`ToolRegistry` tenant-scoped mode, for future use inside `ChatEngine.sendMessage()`** (not exercised by this sub-project's own deliverable, since CorpFlow's chat route doesn't call `ChatEngine` yet — documented here because the mechanism ships in `@aria/core` now and future pillars depend on it): `TenantContext` constructed fresh per invocation → each tool call executes with `context.tenant` injected server-side → any violation short-circuits the same way as above.
 
 ## `@aria/adapter-corpflow` Package Contents (this sub-project's slice only)
 
@@ -81,15 +86,12 @@ packages/adapter-corpflow/          # lives in this monorepo, git-tag-pinned dep
     └── security-audit-log.test.ts
 ```
 
-## Migration Inventory (closes a gap-analysis/red-team finding)
+## Migration Scope (closes a gap-analysis/red-team finding)
 
-An earlier draft said tools would be "ported from the one-shot `api/ai/*` endpoints where sensible" — vague enough that the vulnerable `nl-query` endpoint could have been left running, untouched, alongside the new "safe" system. That is now explicitly disallowed. Every route under `src/app/api/aria/*` and `src/app/api/ai/*` must be classified as one of:
+**Revised after a real-code investigation done during planning.** An earlier draft required classifying all 21 existing `api/aria/*`/`api/ai/*` routes as migrate-now/decommission/confirmed-no-tenant-data, written before any of them had actually been read. That read found the vulnerability class this sub-project exists to close — **the LLM itself determining query scoping** — exists in exactly **one** of the 21 routes: `nl-query`. Every other route, including `data-hygiene` (which also runs raw SQL), uses hand-written Drizzle queries with server-set `eq(tenantId, ...)` filters; the LLM never influences what gets queried or how it's scoped in any of them. Requiring code changes to 20 routes that were never vulnerable to this bug class would be scope creep into the future cross-module-Q&A/automation-builder pillars' job (turning one-shot generators into reusable tools), not this sub-project's mandate — so the classification is narrowed to match the real risk:
 
-- **Migrate now** — rebuilt on `ToolRegistry` or `QuerySpecExecutor` as part of this sub-project. `nl-query` is migrate-now, non-negotiably — it is the concrete instance of the bug this sub-project exists to fix, and becomes this sub-project's real end-to-end proof against a live model (closing the separate gap-analysis finding that this layer could otherwise ship with no real caller to validate it).
-- **Decommission** — redirected to a "temporarily unavailable, being migrated" response until a later sub-project migrates it. Nothing touching tenant-scoped data may be left running through the old, unguarded path.
-- **Confirmed no tenant data** — rare; requires explicit confirmation, not assumption.
-
-The full classification of all 21 routes (5 under `api/aria`, 16 under `api/ai`) is deferred to the implementation plan, not enumerated here — but the plan may not proceed without every route accounted for.
+- **`nl-query`: migrate now, non-negotiably.** Rebuilt on `QuerySpecExecutor` as part of this sub-project — it is the concrete instance of the bug this sub-project exists to fix, and becomes this sub-project's real end-to-end proof against a live model (closing the separate gap-analysis finding that this layer could otherwise ship with no real caller to validate it).
+- **The other 20 routes: documented, not modified.** Each gets a one-line note in the implementation plan recording that its tenant scoping is server-controlled (not LLM-influenced) and therefore correctly out of scope for this sub-project — a factual record, not a silent omission.
 
 ## Testing Strategy
 
@@ -104,8 +106,9 @@ The full classification of all 21 routes (5 under `api/aria`, 16 under `api/ai`)
 `RISK-REGISTER.md` gets a new **RISK-004**, filed alongside this spec, covering residual risks deliberately accepted rather than solved here:
 1. **Indirect prompt injection via legitimately-returned tenant data.** Data a scoped tool or query correctly returns (e.g., a CRM note field) could itself contain text crafted to manipulate the LLM's *next* action. This design mitigates only the error-message-leak instantiation of this risk (raw DB errors never surface); the general case — adversarial content steering a subsequent tool call — is not solved here.
 2. **Query whitelist doesn't yet gate on per-tenant module enablement.** A tenant without, e.g., the Grants module enabled could still successfully query a globally-whitelisted grants-related table. Not a tenant-boundary leak, but a feature-gating gap using the same mechanism — the progressive-disclosure sub-project is expected to close this.
-3. **Multi-entity/multi-tenant session ambiguity is unverified.** CorpFlow's schema has parent-entity/multi-entity-hierarchy fields; whether a single authenticated session can legitimately resolve to more than one tenant is not confirmed. `TenantContext` assumes single-tenant-per-session until this is checked against CorpFlow's actual auth code.
+3. ~~Multi-entity/multi-tenant session ambiguity is unverified.~~ **Resolved during planning (2026-08-29):** CorpFlow already resolves a single `tenantId` per request via `verifyAuth()` → `resolveActiveDbUser()`, using an `active-tenant` cookie checked against a real `user_entity_memberships` table for users who belong to multiple tenants. `TenantContext`'s single-`tenantId` design is correct as specified — it should consume `verifyAuth()`'s already-resolved `tenantId`, never attempt to re-derive tenant identity from the auth id itself. **Separately noted, not this project's bug to fix:** `resolveActiveDbUser()`'s fallback when the cookie is missing/invalid picks "the first `users` row matching this auth id" with no deterministic ordering, not even using the `isPrimary` flag that exists on `user_entity_memberships` for exactly this case — a real, pre-existing non-determinism in CorpFlow's own auth code, inherited as-is by this tenant-scoping layer (whatever `verifyAuth()` returns is trusted, correctly, by our contract) but independent of and out of scope for this sub-project. Flagged to the user directly outside this spec as something CorpFlow's own team may want to fix.
 4. **`SecurityAuditLog` is intended as the same system the future autonomous-agents pillar's audit-trail requirement will extend**, not a separate one — stated here explicitly so the agents sub-project doesn't independently reinvent audit logging.
+5. **`onCriticalViolation` wiring: resolved during planning.** CorpFlow has a real Slack bot integration (`src/lib/slack/notifications.ts`, e.g. `notifySLABreach`) on a global admin-alerts channel — no generic `logSecurityEvent`-style helper exists yet. Adapter-corpflow's `onCriticalViolation` implementation adds a `notifyTenantScopingViolation()` function to that same file, following its existing pattern exactly.
 
 Recommended, not built here (would expand this sub-project into a whole-app migration): fixing CorpFlow's DB connection to use a non-superuser, per-request-scoped role with `FORCE ROW LEVEL SECURITY`, so Postgres itself would catch a code-level scoping bug as true defense-in-depth. Filed as a strongly-recommended follow-up for CorpFlow's own backlog.
 
@@ -116,6 +119,6 @@ The first version of this design gave `QuerySpecExecutor` an adapter-supplied "c
 ## Open Items Carried Into the Implementation Plan
 
 - **Package location: decided 2026-08-29.** `@aria/adapter-corpflow` lives in this monorepo (`packages/adapter-corpflow`), consumed by CorpFlow as a git-tag-pinned dependency — matching Phase 1's versioning story. Chosen specifically to keep the core/adapter boundary structurally enforced by a real repo separation, in service of `@aria/core` staying generic and reusable across apps rather than accumulating CorpFlow-specific assumptions.
-- **Full 21-route migration classification** (migrate-now / decommission / confirmed-no-tenant-data) is deferred to the plan, per the Migration Inventory section above.
-- **Multi-entity session verification** (RISK-004 item 3) should be checked against CorpFlow's real auth code early in planning, since it affects whether `TenantContext`'s single-`tenantId` shape is sufficient.
-- **Where `SecurityAuditLog`'s storage/alerting actually plugs into CorpFlow** (does CorpFlow have an existing alerting mechanism to wire `onCriticalViolation` into, or does one need to be built) needs confirming during planning.
+- **Route migration scope: resolved during planning.** Only `nl-query` is migrated; the other 20 routes get a documented, no-code-change classification. See Migration Scope above.
+- **Multi-entity session verification: resolved during planning.** See RISK-004 item 3 above.
+- **`SecurityAuditLog` alerting: resolved during planning.** See RISK-004 item 5 above.
