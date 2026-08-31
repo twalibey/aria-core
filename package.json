@@ -12,6 +12,7 @@
     "typecheck": "tsc -b --noEmit && vitest --typecheck.only --run"
   },
   "devDependencies": {
+    "@types/node": "^20.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }

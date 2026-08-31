@@ -511,6 +511,7 @@ function makeWhitelist(): QueryWhitelist {
   return {
     tables: {
       donations: {
+        tableRef: 'donations-table',
         columns: {
           id: { ref: 'donations.id' },
           amount: { ref: 'donations.amount' },
@@ -547,6 +548,7 @@ describe('QuerySpecExecutor', () => {
 
     expect(result).toEqual({ success: true, rows: [{ amount: 100 }] });
     expect(capturedPlan?.tenantFilter).toEqual({ ref: 'donations.tenant_id', value: 'tenant-1' });
+    expect(capturedPlan?.tableRef).toBe('donations-table');
   });
 
   it('rejects a non-whitelisted table and logs a violation, without calling the runner', async () => {
@@ -693,6 +695,8 @@ export interface QueryWhitelistColumn {
 }
 
 export interface QueryWhitelistTable {
+  /** Opaque adapter-defined table reference (e.g. a real Drizzle table object) — the runner's .from()-equivalent needs an actual table, not just its name. Core never inspects it. */
+  tableRef: unknown;
   columns: Record<string, QueryWhitelistColumn>;
   /** Whitelist key (must exist in `columns`) identifying this table's tenant-id column. */
   tenantColumnKey: string;
@@ -728,7 +732,10 @@ export interface ResolvedQueryFilter {
 }
 
 export interface ResolvedQueryPlan {
+  /** Human-readable table name, for logging only — NOT for the runner's .from() call, which must use tableRef. */
   table: string;
+  /** Opaque table reference resolved from the whitelist — pass this to .from(), never `table`. */
+  tableRef: unknown;
   columns: unknown[];
   filters: ResolvedQueryFilter[];
   /** Always present, always applied by the runner — never optional, never overridable by the descriptor. */
@@ -746,6 +753,8 @@ export interface QuerySpecResult {
   error?: string;
 }
 ```
+
+> **Superseded:** the code block above still shows `ResolvedQueryPlan.columns` as `columns: unknown[];`. What actually shipped is `columns: Array<{ key: string; ref: unknown }>` — each resolved column ref paired with its caller-facing whitelist key. A bare ref list loses the output column name a runner needs to build a real field-selection map (`db.select({ [key]: ref, ... })`); without the key, a runner has no way to name the projected column, which is exactly what let the shipped `v0.1.0` runner degrade into an effective `SELECT *` (see the next annotation below, and `packages/core/src/types.ts` / the "Breaking change in v0.2.0" note in `packages/core/README.md` for the real current shape).
 
 - [ ] **Step 4: Implement `QuerySpecExecutor`**
 
@@ -858,6 +867,7 @@ export class QuerySpecExecutor {
 
     const plan: ResolvedQueryPlan = {
       table: descriptor.table,
+      tableRef: table.tableRef,
       columns: columnRefs,
       filters,
       tenantFilter: { ref: table.columns[table.tenantColumnKey].ref, value: tenant.tenantId },
@@ -1036,11 +1046,14 @@ This package holds the generic, schema-agnostic half of the CorpFlow integration
 **Files:**
 - Create: `packages/adapter-corpflow/package.json`
 - Create: `packages/adapter-corpflow/tsconfig.json`
+- Create: `packages/adapter-corpflow/tsup.config.ts`
 - Create: `packages/adapter-corpflow/src/index.ts` (placeholder export, filled in Task 8)
+
+**Corrected during pre-flight review, before dispatch:** `packages/adapter-fitness`/`packages/adapter-example` ship raw `.ts` via `"main": "./src/index.ts"` because they are consumed only inside this monorepo's own vitest/TS pipeline — no external app ever imports them. `adapter-corpflow` is different: Task 12 has CorpFlow (a separate repo, consuming this package as an external dependency per Task 9) import it directly. It needs a real build step and `dist/` output, matching `packages/core`'s pattern exactly — not adapter-fitness's.
 
 - [ ] **Step 1: Create `package.json`**
 
-Mirrors `packages/adapter-fitness/package.json` exactly, plus `drizzle-orm` (CorpFlow's real pinned version) as a dependency, since this package's `QueryPlanRunner` uses it directly:
+Mirrors `packages/core/package.json`'s build/export shape (not adapter-fitness's), plus `drizzle-orm` (CorpFlow's real pinned version) as a dependency:
 
 ```json
 {
@@ -1048,17 +1061,39 @@ Mirrors `packages/adapter-fitness/package.json` exactly, plus `drizzle-orm` (Cor
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\""
+  },
   "dependencies": {
     "@aria/core": "*",
     "drizzle-orm": "^0.45.1"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1"
   }
 }
 ```
 
+> **Superseded:** the shipped `packages/adapter-corpflow/package.json` no longer matches the block above. Current state (`v0.2.0`): `@aria/core` moved out of `dependencies` entirely and is now both a `devDependency` and a `peerDependency`, pinned to a literal git-tag URL (`github:twalibey/aria-core#core-v0.2.0`) rather than the workspace wildcard `"*"` shown here — because a consumer installing this package as an external dependency needs to install `@aria/core` itself too (see the peer/dev-dependency rationale in `packages/core/README.md`'s Versioning & Distribution section). `drizzle-orm` also moved out of `dependencies` to being both a `devDependency` and a `peerDependency` for the same reason (this package operates on the *consumer's* own Drizzle column/table objects, so it shouldn't force its own runtime copy on them — the same rationale that made `@aria/core` a peer dependency here). `version` is `"0.2.0"`, not `"0.0.0"`, and a `"prepare": "npm run build"` script was added (needed for this package to self-build on a git-tag install — see "Local package.json changes needed for git-tag installs" in `packages/core/README.md`).
+
 - [ ] **Step 2: Create `tsconfig.json`**
 
-Identical to `packages/adapter-fitness/tsconfig.json`:
+Identical to `packages/core/tsconfig.json`:
 
 ```json
 {
@@ -1071,23 +1106,45 @@ Identical to `packages/adapter-fitness/tsconfig.json`:
 }
 ```
 
-- [ ] **Step 3: Install**
+- [ ] **Step 3: Create `tsup.config.ts`**
+
+Identical to `packages/core/tsup.config.ts`:
+
+```typescript
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: ['src/index.ts'],
+  format: ['esm', 'cjs'],
+  dts: false,
+  splitting: false,
+  sourcemap: false,
+  clean: true,
+});
+```
+
+- [ ] **Step 4: Install**
 
 Run: `npm install`
-Expected: `drizzle-orm` resolves into the workspace root `node_modules` (or the package's own, depending on hoisting), `packages/adapter-corpflow` recognized as a workspace member.
+Expected: `drizzle-orm` and `tsup` resolve, `packages/adapter-corpflow` recognized as a workspace member.
 
-- [ ] **Step 4: Create a placeholder `index.ts` (filled for real in Task 8 — not a plan placeholder, a genuinely empty package skeleton one commit before it gets content, matching how a new package is normally scaffolded)**
+- [ ] **Step 5: Create a placeholder `index.ts` (filled for real in Task 8 — not a plan placeholder, a genuinely empty package skeleton one commit before it gets content, matching how a new package is normally scaffolded)**
 
 ```typescript
 // packages/adapter-corpflow/src/index.ts
 export {};
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Build to verify the scaffold works**
+
+Run: `npm run build --workspace=packages/adapter-corpflow`
+Expected: succeeds, produces `packages/adapter-corpflow/dist/index.{js,cjs,d.ts,d.cts}`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/adapter-corpflow/package.json packages/adapter-corpflow/tsconfig.json packages/adapter-corpflow/src/index.ts package-lock.json
-git commit -m "chore: scaffold @aria/adapter-corpflow package"
+git add packages/adapter-corpflow/package.json packages/adapter-corpflow/tsconfig.json packages/adapter-corpflow/tsup.config.ts packages/adapter-corpflow/src/index.ts package-lock.json
+git commit -m "chore: scaffold @aria/adapter-corpflow package with a real build step"
 ```
 
 ---
@@ -1128,8 +1185,10 @@ describe('createDrizzleQueryPlanRunner', () => {
     const db = { select: vi.fn().mockReturnValue(chain) };
 
     const runner = createDrizzleQueryPlanRunner(db as any);
+    const tableRef = { name: 'donations' } as any;
     const plan: ResolvedQueryPlan = {
       table: 'donations',
+      tableRef,
       columns: [{ name: 'id' } as any],
       filters: [],
       tenantFilter: { ref: fakeColumn, value: 'tenant-1' },
@@ -1139,6 +1198,7 @@ describe('createDrizzleQueryPlanRunner', () => {
     const rows = await runner(plan);
 
     expect(rows).toEqual([{ id: 'row-1' }]);
+    expect(chain.from).toHaveBeenCalledWith(tableRef);
     // The real eq() call produces a structurally identical condition object —
     // comparing against it (not a string or a mock) proves the runner used
     // the actual tenant column ref and value, not something it fabricated.
@@ -1162,6 +1222,7 @@ describe('createDrizzleQueryPlanRunner', () => {
     const runner = createDrizzleQueryPlanRunner(db as any);
     const plan: ResolvedQueryPlan = {
       table: 'donations',
+      tableRef: { name: 'donations' } as any,
       columns: [amountColumn],
       filters: [{ ref: amountColumn, op: 'gte', value: 100 }],
       tenantFilter: { ref: tenantColumn, value: 'tenant-1' },
@@ -1228,10 +1289,12 @@ export function createDrizzleQueryPlanRunner(db: DrizzleQueryable): QueryPlanRun
     const otherConditions = plan.filters.map(buildFilterCondition);
     const condition = otherConditions.length > 0 ? and(tenantCondition, ...otherConditions)! : tenantCondition;
 
-    return db.select().from(plan.table).where(condition);
+    return db.select().from(plan.tableRef).where(condition);
   };
 }
 ```
+
+> **Superseded — this is the shipped `SELECT *` defect, since fixed.** `return db.select().from(plan.tableRef).where(condition);` calls `db.select()` with no field-selection argument, which returns every column on the row — silently discarding all of `plan.columns`, `plan.aggregation`, `plan.sort`, and `plan.limit`. This shipped as `v0.1.0` and was found and fixed after the fact (see RISK-004 item 6 in `RISK-REGISTER.md`, and the "Behavior change in v0.2.0" note in `packages/adapter-corpflow/README.md`). The real, currently-shipped `createDrizzleQueryPlanRunner` in `packages/adapter-corpflow/src/query-plan-runner.ts` builds an explicit `fields` selection object from `plan.columns`/`plan.aggregation` (falling back to a single safe tenant-column-only projection if a plan somehow has neither), and always applies `.orderBy()` (when applicable) and `.limit()`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1337,6 +1400,7 @@ import {
 export const nlQueryWhitelist: QueryWhitelist = {
   tables: {
     users: {
+      tableRef: users,
       columns: {
         id: { ref: users.id },
         tenant_id: { ref: users.tenantId },
@@ -1349,6 +1413,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at"],
     },
     cases: {
+      tableRef: cases,
       columns: {
         id: { ref: cases.id },
         tenant_id: { ref: cases.tenantId },
@@ -1362,6 +1427,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at", "completed_at"],
     },
     documents: {
+      tableRef: documents,
       columns: {
         id: { ref: documents.id },
         tenant_id: { ref: documents.tenantId },
@@ -1373,6 +1439,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at"],
     },
     payments: {
+      tableRef: payments,
       columns: {
         id: { ref: payments.id },
         tenant_id: { ref: payments.tenantId },
@@ -1385,6 +1452,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at", "amount"],
     },
     support_tickets: {
+      tableRef: supportTickets,
       columns: {
         id: { ref: supportTickets.id },
         tenant_id: { ref: supportTickets.tenantId },
@@ -1399,6 +1467,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at", "resolved_at"],
     },
     feedback_posts: {
+      tableRef: feedbackPosts,
       columns: {
         id: { ref: feedbackPosts.id },
         tenant_id: { ref: feedbackPosts.tenantId },
@@ -1412,6 +1481,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["created_at", "vote_count"],
     },
     course_enrollments: {
+      tableRef: courseEnrollments,
       columns: {
         id: { ref: courseEnrollments.id },
         tenant_id: { ref: courseEnrollments.tenantId },
@@ -1425,6 +1495,7 @@ export const nlQueryWhitelist: QueryWhitelist = {
       sortableColumns: ["progress_pct"],
     },
     gamification_levels: {
+      tableRef: gamificationLevels,
       columns: {
         id: { ref: gamificationLevels.id },
         tenant_id: { ref: gamificationLevels.tenantId },
@@ -1899,6 +1970,7 @@ const fakeRows: Record<string, { tenant_id: string; amount: number }[]> = {
 const whitelist: QueryWhitelist = {
   tables: {
     payments: {
+      tableRef: 'payments',
       columns: { id: { ref: 'id' }, tenant_id: { ref: 'tenant_id' }, amount: { ref: 'amount' } },
       tenantColumnKey: 'tenant_id',
       aggregations: ['sum', 'count'],
@@ -1932,7 +2004,12 @@ async function main() {
       systemPrompt: 'Translate the question into a QueryDescriptor JSON for table "payments" (columns: id, tenant_id, amount). Never include tenant_id in filters.',
       messages: [{ role: 'user', content: question }],
     });
-    const descriptor = JSON.parse(response.content);
+    // Strip a markdown code fence if present — the same LLM behavior that
+    // broke MemoryManager.maybeSummarize() against a live model (see
+    // packages/core/src/memory-manager.ts's stripMarkdownFence) applies
+    // here too; this script must not repeat that already-learned mistake.
+    const jsonText = response.content.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+    const descriptor = JSON.parse(jsonText);
     const result = await executor.execute(descriptor, { tenantId: TENANT_A });
     const leaked = (result.rows ?? []).some((r) => r.tenant_id === TENANT_B);
     console.log(`Question: "${question}"`);
@@ -1948,6 +2025,8 @@ main().catch((err) => {
   process.exitCode = 1;
 });
 ```
+
+> **Superseded:** the script above's leak check — `const leaked = (result.rows ?? []).some((r) => r.tenant_id === TENANT_B);`, called only ever as `executor.execute(descriptor, { tenantId: TENANT_A })` — is tautological and unfalsifiable. `QuerySpecExecutor.execute()` sets `plan.tenantFilter.value` from the `TenantContext` argument WE pass in, never from the descriptor, so this mock `runner`'s `fakeRows[tenantId]` lookup can only ever return `TENANT_A`'s own row; no live model output could ever make `leaked` become `true`. The actually-shipped `packages/adapter-corpflow/scripts/live-tenant-scoping-smoke-test.ts` (commits `bdd42fb`, `e6ccc74`, `809eba6`) drops this unfalsifiable check, calls `executor.execute()` once per question **as each of two tenants**, and asserts instead on the real, falsifiable, live-model-dependent signal: whether the model's descriptor tried to smuggle a filter on the tenant column, and whether `QuerySpecExecutor` actually logged that attempt as an `llm_supplied_tenant_id` violation. See that file's own header comment for the full rationale.
 
 - [ ] **Step 2: Run it manually** (not part of automated CI — this is the point)
 

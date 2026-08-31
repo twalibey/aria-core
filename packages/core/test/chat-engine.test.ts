@@ -232,6 +232,32 @@ describe('ChatEngine.sendMessage', () => {
     expect(seen[0].error.message).toBe('provider down');
   });
 
+  it('threads an optional TenantContext through to tool execution', async () => {
+    const { engine, toolRegistry } = buildEngine({
+      llmProvider: makeStubProvider([
+        { content: '', toolCalls: [{ name: 'echo_tenant', arguments: {} }] },
+        { content: 'done' },
+      ]),
+    });
+
+    let receivedTenantId: string | undefined;
+    toolRegistry.register({
+      definition: {
+        name: 'echo_tenant',
+        description: 'echoes the tenant id it received',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      handler: async (_userId, _args, tenant) => {
+        receivedTenantId = tenant?.tenantId;
+        return `tenant=${tenant?.tenantId}`;
+      },
+    });
+
+    await engine.sendMessage('u1', 'hi', 'free', { tenantId: 'tenant-xyz' });
+
+    expect(receivedTenantId).toBe('tenant-xyz');
+  });
+
   it('invokes onError with stage "context" when the context provider throws', async () => {
     const seen: { stage: string }[] = [];
     const historyStore = new InMemoryHistoryStore();

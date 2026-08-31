@@ -57,7 +57,14 @@ Replaces an earlier draft's "adapter-supplied compiler function" design, removed
 
 ### `security-audit-log.ts` — `SecurityAuditLog`
 
-Interface; adapter implements storage. Logs three violation categories: (1) a non-whitelisted table/column/aggregation request, (2) an LLM-supplied tenant identifier of any kind, (3) a tool or query call missing required tenant context entirely. Fail-closed — any violation aborts the operation before execution.
+Interface; adapter implements storage. Logs three violation categories: (1) a non-whitelisted table/column/aggregation request, (2) an LLM-supplied tenant identifier of any kind, (3) a tool or query call missing required tenant context entirely.
+
+**Corrected: not "any violation aborts the operation."** The actually implemented, deliberately-designed behavior differs by category, and is consistently applied the same way in both `ToolRegistry.execute()` and `QuerySpecExecutor.execute()`:
+
+- Categories (1) and (3) do reject the call — a non-whitelisted table/column/aggregation/sort, or a missing required `TenantContext`, causes that specific call/query to fail safely (a generic error result, never a thrown exception), after logging the violation.
+- Category (2) — an LLM-supplied tenant identifier (a `tenantId`/`tenant_id` field in tool-call arguments, or a descriptor filter targeting the tenant column) — does **not** abort anything. The offending field/filter is stripped, the violation is logged, and the call proceeds and succeeds using the real, trusted tenant context from `TenantContext` in place of whatever the LLM tried to supply.
+
+No violation category halts anything beyond the single call/query it occurred on — there is no cross-request or session-level abort behavior.
 
 **`onCriticalViolation` is a required constructor parameter, not optional.** This is a direct lesson from the adapter-fitness phase, where `MemoryManager.onError` being optional meant both reference adapters shipped without wiring it, making a broken subsystem silent. A security-relevant callback gets the stricter treatment: `SecurityAuditLog` cannot be constructed without it.
 

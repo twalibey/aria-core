@@ -86,9 +86,13 @@ export interface LLMProvider {
 // Tools
 // ============================================================
 
+export interface TenantContext {
+  tenantId: string;
+}
+
 export interface Tool<TArgs = Record<string, unknown>> {
   definition: ToolDefinition;
-  handler: (userId: string, args: TArgs) => Promise<string>;
+  handler: (userId: string, args: TArgs, tenant?: TenantContext) => Promise<string>;
 }
 
 export interface ToolExecutionResult {
@@ -167,4 +171,93 @@ export interface AriaMemoryStore {
   /** ALL memory contents for this user, unlimited — used only for dedup, matching the real app's unlimited dedup query. */
   getAllMemoryContents(userId: string): Promise<string[]>;
   saveMemory(userId: string, entry: AriaMemoryEntry): Promise<void>;
+}
+
+// ============================================================
+// Tenant scoping
+// ============================================================
+
+export type SecurityViolationCategory =
+  | 'non_whitelisted_field'
+  | 'llm_supplied_tenant_id'
+  | 'missing_tenant_context';
+
+export interface SecurityViolation {
+  category: SecurityViolationCategory;
+  detail: string;
+  tenantId?: string;
+}
+
+export interface SecurityAuditLogConfig {
+  store: (violation: SecurityViolation) => Promise<void>;
+  onCriticalViolation: (violation: SecurityViolation) => void | Promise<void>;
+}
+
+// ============================================================
+// Query spec (tenant-scoped analytics)
+// ============================================================
+
+export interface QueryWhitelistColumn {
+  /** Opaque adapter-defined column reference (e.g. a real Drizzle column). Core never inspects it. */
+  ref: unknown;
+}
+
+export interface QueryWhitelistTable {
+  /** Opaque adapter-defined table reference (e.g. a real Drizzle table object) — the runner's .from()-equivalent needs an actual table, not just its name. Core never inspects it. */
+  tableRef: unknown;
+  columns: Record<string, QueryWhitelistColumn>;
+  /** Whitelist key (must exist in `columns`) identifying this table's tenant-id column. */
+  tenantColumnKey: string;
+  aggregations: Array<'count' | 'sum' | 'avg'>;
+  sortableColumns: string[];
+}
+
+export interface QueryWhitelist {
+  tables: Record<string, QueryWhitelistTable>;
+}
+
+export type QueryFilterOp = 'eq' | 'gt' | 'gte' | 'lt' | 'lte' | 'in';
+
+export interface QueryFilter {
+  column: string;
+  op: QueryFilterOp;
+  value: string | number | boolean | (string | number)[];
+}
+
+export interface QueryDescriptor {
+  table: string;
+  columns: string[];
+  filters?: QueryFilter[];
+  aggregation?: { fn: 'count' | 'sum' | 'avg'; column: string };
+  sort?: { column: string; direction: 'asc' | 'desc' };
+  limit?: number;
+}
+
+export interface ResolvedQueryFilter {
+  ref: unknown;
+  op: QueryFilterOp;
+  value: string | number | boolean | (string | number)[];
+}
+
+export interface ResolvedQueryPlan {
+  /** Human-readable table name, for logging only — NOT for the runner's .from() call, which must use tableRef. */
+  table: string;
+  /** Opaque table reference resolved from the whitelist — pass this to .from(), never `table`. */
+  tableRef: unknown;
+  /** Caller-facing whitelist key paired with its resolved opaque ref. The runner needs both to build a real field-selection map (e.g. `db.select({ [key]: ref, ... })`) — a bare ref list would lose the output column names. Core never inspects `ref`. */
+  columns: Array<{ key: string; ref: unknown }>;
+  filters: ResolvedQueryFilter[];
+  /** Always present, always applied by the runner — never optional, never overridable by the descriptor. */
+  tenantFilter: { ref: unknown; value: string };
+  aggregation?: { fn: 'count' | 'sum' | 'avg'; ref: unknown };
+  sort?: { ref: unknown; direction: 'asc' | 'desc' };
+  limit: number;
+}
+
+export type QueryPlanRunner = (plan: ResolvedQueryPlan) => Promise<Record<string, unknown>[]>;
+
+export interface QuerySpecResult {
+  success: boolean;
+  rows?: Record<string, unknown>[];
+  error?: string;
 }

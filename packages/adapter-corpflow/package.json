@@ -1,5 +1,5 @@
 {
-  "name": "@aria/core",
+  "name": "@aria/adapter-corpflow",
   "version": "0.3.0",
   "private": true,
   "type": "module",
@@ -22,13 +22,14 @@
     "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\"",
     "prepare": "npm run build"
   },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.117.1",
-    "ajv": "^8.20.0",
-    "openai": "^6.49.0"
-  },
   "devDependencies": {
     "tsup": "^8.5.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "@aria/core": "github:twalibey/aria-core#core-v0.3.0",
+    "drizzle-orm": "^0.45.1"
+  },
+  "peerDependencies": {
+    "@aria/core": "github:twalibey/aria-core#core-v0.3.0",
+    "drizzle-orm": "^0.45.1"
   }
 }

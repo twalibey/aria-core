@@ -7,6 +7,7 @@ import type {
   LLMProvider,
   SubscriptionTier,
   RateLimitResult,
+  TenantContext,
 } from './types.js';
 import { buildSystemPrompt } from './personality.js';
 import { checkSafety } from './safety-filter.js';
@@ -79,7 +80,8 @@ export class ChatEngine<TContext> {
   async sendMessage(
     userId: string,
     content: string,
-    tier: SubscriptionTier
+    tier: SubscriptionTier,
+    tenant?: TenantContext
   ): Promise<SendMessageResult> {
     const rateLimit = await this.deps.rateLimiter.check(userId, tier, this.timezone);
     if (!rateLimit.allowed) {
@@ -115,7 +117,7 @@ export class ChatEngine<TContext> {
 
     let responseText: string;
     try {
-      responseText = await this.generateResponse(userId);
+      responseText = await this.generateResponse(userId, tenant);
     } catch {
       responseText = this.deps.fallbackEngine.respond(content);
     }
@@ -139,7 +141,7 @@ export class ChatEngine<TContext> {
     });
   }
 
-  private async generateResponse(userId: string): Promise<string> {
+  private async generateResponse(userId: string, tenant?: TenantContext): Promise<string> {
     // `history` already ends with the current user turn: sendMessage() persists
     // the user message before calling this method. Nothing here may append a
     // second copy of it.
@@ -204,7 +206,12 @@ export class ChatEngine<TContext> {
         );
         toolResults = await Promise.all(
           response.toolCalls.map(async (call) => {
-            const result = await this.deps.toolRegistry.execute(userId, call.name, call.arguments);
+            const result = await this.deps.toolRegistry.execute(
+              userId,
+              call.name,
+              call.arguments,
+              tenant
+            );
             // Invalidate even when the tool call failed: a handler can throw AFTER a successful write
             // (e.g. insert succeeds, a follow-up read then throws), so success===true is not a safe
             // gate — skipping invalidation on failure risks serving stale cached context, which is
