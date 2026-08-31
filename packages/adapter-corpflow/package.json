@@ -22,15 +22,14 @@
     "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\"",
     "prepare": "npm run build"
   },
-  "dependencies": {
-    "drizzle-orm": "^0.45.1"
-  },
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "@aria/core": "github:twalibey/aria-core#core-v0.2.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.2.0",
+    "drizzle-orm": "^0.45.1"
   },
   "peerDependencies": {
-    "@aria/core": "github:twalibey/aria-core#core-v0.2.0"
+    "@aria/core": "github:twalibey/aria-core#core-v0.2.0",
+    "drizzle-orm": "^0.45.1"
   }
 }
