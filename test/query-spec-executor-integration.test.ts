@@ -25,6 +25,15 @@ import { createDrizzleQueryPlanRunner, AGGREGATION_RESULT_KEY } from '../src/que
  * Postgres driver would, right as the query plan runner's own `.limit()`
  * (or aggregation `.limit()`) call executes — this is the real drizzle SQL
  * compiler and query builder, not a hand-rolled fixture.
+ *
+ * Caveat: `@aria/core`'s import above resolves through node_modules, which —
+ * per packages/core/README.md's git-tag drift note — is a fetched copy of
+ * whatever `core-vX` tag this package's own package.json currently pins, not
+ * automatically this monorepo's live `packages/core/src`. So this test does
+ * prove the real SQL-rendering seam described above, but it only proves
+ * `QuerySpecExecutor` behaves as the PINNED core release does; a change to
+ * `packages/core/src` that hasn't been re-tagged and re-installed yet is
+ * invisible here until that happens.
  */
 
 const donations = pgTable('donations', {
