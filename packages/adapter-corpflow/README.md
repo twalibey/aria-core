@@ -19,7 +19,7 @@ As of `v0.2.0`, `createDrizzleQueryPlanRunner` genuinely enforces the whitelist-
 - Indirect prompt injection via legitimately-returned data is only partially mitigated (see RISK-004 item 1).
 - The query whitelist does not yet gate on per-tenant module enablement (RISK-004 item 2).
 - A malformed query plan (no columns and no aggregation) falls back to a silent `_tenantId`-only result rather than an error (RISK-004 item 5).
-- Test coverage for the query-plan runner is mock-based only, with no real-Drizzle SQL-rendering test (RISK-004 item 6).
+- ~~Test coverage for the query-plan runner is mock-based only, with no real-Drizzle SQL-rendering test (RISK-004 item 6).~~ **Resolved:** see `test/query-spec-executor-integration.test.ts`, which runs a real `QuerySpecExecutor` + real `createDrizzleQueryPlanRunner` against a real `drizzle-orm` pg-core table and asserts on the actual compiled SQL.
 - The `count` aggregation counts non-null values of a column, not rows — fine today, but worth checking if the whitelist is extended to a nullable column (RISK-004 item 7).
 - The tenant-scoping-violation Slack alert has no severity tiering, creating alert-fatigue risk (RISK-004 item 8).
 
