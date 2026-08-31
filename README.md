@@ -6,7 +6,13 @@ The universal ARIA engine — personality, chat orchestration, rate limiting, to
 
 **This package performs no authentication or authorization.** Every method on `AriaContextProvider`, `AriaHistoryStore`, and every `Tool` handler receives a raw `userId: string` on faith. The consuming app's route layer is responsible for verifying the caller's authenticated session matches `userId` *before* calling `ChatEngine.sendMessage()` or any core interface method directly. Passing an unverified or client-supplied `userId` is a direct cross-user data exposure vulnerability.
 
-Tool handlers must derive all data scope from the `userId` parameter they're called with — never from a field inside `args`, even if a future tool schema is tempted to add one.
+Tool handlers must derive all data scope from the `userId` parameter (and, in tenant-scoped mode, the `tenant: TenantContext` parameter) they're called with — never from a field inside `args`, even if a future tool schema is tempted to add one.
+
+### Tenant-scoped mode is opt-in via `SecurityAuditLog`, not a separate flag
+
+`ToolRegistry` has no separate boolean for "tenant-scoped mode." Passing a `SecurityAuditLog` instance as its constructor's second argument turns tenant-scoping enforcement **on**: `execute()` then requires a `TenantContext` on every call (failing the call and logging a `missing_tenant_context` violation if one is missing), and strips-and-logs any LLM-supplied tenant-identity field in `args` (see below). **Omitting `securityAuditLog` silently turns all of this off** — `execute()` will happily run without a `TenantContext` at all. This is a deliberate design choice (opt-in via the audit log, not a redundant boolean you could set inconsistently with it) — not a bug — but it means a consumer building a multi-tenant integration must remember to construct and pass a `SecurityAuditLog` before relying on any tenant enforcement; there is no warning or error if it's left out.
+
+When tenant-scoped mode is on, `ToolRegistry.execute()` also strips any of the known tenant-identity spellings (`tenantId`, `tenant_id`) an LLM-calling tool tries to pass in `args`, logging an `llm_supplied_tenant_id` violation each time, rather than trusting it — the real tenant always comes from the `TenantContext` parameter, never from the tool call arguments.
 
 ### Safety filter limitations
 
@@ -39,6 +45,10 @@ new ChatEngine({
 
 `stage` is `'context' | 'llm' | 'tool'`. Wire it to your logger — without it, a broken LLM integration is indistinguishable from a normal fallback.
 
+### Breaking change in `v0.2.0`: `ResolvedQueryPlan.columns` shape
+
+Between `0.1.0` and `0.2.0`, `ResolvedQueryPlan.columns` changed from `unknown[]` (a bare list of opaque column refs) to `Array<{ key: string; ref: unknown }>` (each resolved ref paired with its caller-facing whitelist key). A bare ref list loses the output column name a runner needs to build a real field-selection map (e.g. `db.select({ [key]: ref, ... })`); without the key, a runner has no way to know what to call the projected column, which is exactly what let the `v0.1.0` `createDrizzleQueryPlanRunner` degrade into an effective `SELECT *` (see `packages/adapter-corpflow/README.md`'s "Behavior change in v0.2.0" note). Any `QueryPlanRunner` implementation written against `0.1.0`'s `columns: unknown[]` shape must be updated to destructure `{ key, ref }` per column before upgrading to `@aria/core@0.2.0`.
+
 ## Build Before Test or Typecheck
 
 `@aria/core` resolves through its `exports` map to `packages/core/dist/`, which is gitignored. **The package must be built before anything in the workspace typechecks or runs tests against it**:
@@ -53,15 +63,24 @@ Root `npm test` and `npm run typecheck` do this automatically via `pretest` / `p
 
 This package is not published to a registry, and this repo (`aria-core`) is an npm-workspaces monorepo — the repo root itself is **not** installable as a dependency (its `package.json` has no `main`/`exports`, and the real packages live under `packages/*`). Installing `github:twalibey/aria-core#<tag>` directly would clone the whole monorepo root into `node_modules`, which Node cannot resolve anything from.
 
-Instead, each publishable package (`@aria/core`, `@aria/adapter-corpflow`, and any future adapter meant for external consumption) gets its own **per-package release branch**, cut via `git subtree split`, so that package's own directory becomes the root of that branch:
+Instead, each publishable package (`@aria/core`, `@aria/adapter-corpflow`, and any future adapter meant for external consumption) gets its own **per-package release branch**, cut via `git subtree split`, so that package's own directory becomes the root of that branch.
+
+**The first time** a package's release branch is created, `-b` creates it fresh:
 
 ```bash
 git subtree split --prefix=packages/core -b release-core
 git tag core-v0.2.0 release-core
-
-git subtree split --prefix=packages/adapter-corpflow -b release-adapter-corpflow
-git tag adapter-corpflow-v0.2.0 release-adapter-corpflow
 ```
+
+**Every subsequent cut** — i.e. every release after the first for a given package — `git subtree split -b <branch>` fails, because that branch name already exists. The actual, real procedure (used to cut every release after the first one, including this project's) is to split into a new commit and re-point the existing branch ref at it with `git branch -f`, then tag that:
+
+```bash
+NEW_SPLIT_COMMIT=$(git subtree split --prefix=packages/core)
+git branch -f release-core "$NEW_SPLIT_COMMIT"
+git tag core-v0.3.0 release-core
+```
+
+The same `-b` → `-f` distinction applies to `release-adapter-corpflow` / `adapter-corpflow-vX.Y.Z`.
 
 A consuming app pins each package to its own `<package>-vX.Y.Z` tag, not a shared repo-wide tag:
 
@@ -76,7 +95,7 @@ A consuming app pins each package to its own `<package>-vX.Y.Z` tag, not a share
 
 Never depend on a floating branch (e.g. `#main` or the raw `#release-core` branch itself) — pin to the tag. A change made for one consuming app would otherwise silently change behavior for every other app pinned the same way. Releases are tagged with semver; a breaking interface change bumps the major version.
 
-Cutting a new release means re-running the subtree split against the desired commit and creating a new tag — this is currently a manual step (a future improvement could script it). Each package's release branch is independent: bumping `core-vX` does not require re-cutting `adapter-corpflow-vX`, except when adapter-corpflow's own code or its `@aria/core` devDependency pin actually needs to change.
+Cutting a new release means re-running the subtree split against the desired commit and creating a new tag — this is currently a manual step (a future improvement could script it). **Whether bumping `core-vX` requires re-cutting `adapter-corpflow-vX` has not been rigorously tested.** `@aria/adapter-corpflow`'s `peerDependencies` (and `devDependencies`) pin a literal `github:twalibey/aria-core#core-vX` URL, and npm resolves a git-URL dependency spec by its exact resolved reference — so it's likely that a `core` version bump requires re-cutting and re-pointing `adapter-corpflow`'s tag too (updating its `@aria/core` pin to the new `core-vX`), even when `adapter-corpflow`'s own code didn't change, rather than the two release branches being genuinely independent. Treat them as pinned to each other by exact URL until this is verified either way.
 
 `@aria/adapter-corpflow` declares `@aria/core` as both a `devDependency` (needed to build/typecheck the adapter itself) and a `peerDependency` (npm does not install a dependency's own `devDependencies` for a consumer, but the adapter's emitted `dist/*.d.ts` files still `import type` from `@aria/core` — a consumer typechecking against `@aria/adapter-corpflow` needs `@aria/core` present too, even though no runtime import exists). Consumers installing `@aria/adapter-corpflow` should also install `@aria/core` at a compatible tag.
 
@@ -89,6 +108,8 @@ Any *new* publishable package added to this monorepo in the future must, in its 
 - Add a `"prepare": "npm run build"` script alongside its `build` script — `prepare` is what npm runs automatically right after installing a git dependency, and it's what makes the package self-building on install with no monorepo context required.
 
 Skipping any of these hits the exact resolution failure (`main`/`exports`/`dist` not resolving, or a hoisted-only build tool missing) that this mechanism exists to avoid.
+
+**Known tradeoff: a git-tag cross-dependency between two monorepo siblings doesn't stay live-linked to local edits.** `@aria/adapter-corpflow` depends on `@aria/core` via a literal `github:twalibey/aria-core#core-vX` URL (a `devDependency` + `peerDependency`, not a workspace-compatible semver range like `workspace:*` or `*`). Because that's a real external git reference rather than an in-repo workspace link, `npm install` at the repo root resolves it by fetching that tag from GitHub into `packages/adapter-corpflow/node_modules/@aria/core` — Node's module resolution then finds that nested copy before it would ever walk up to the root-level workspace symlink at `node_modules/@aria/core`. This was confirmed empirically while regenerating the lockfile for this fix wave: after `npm install`, `packages/adapter-corpflow/node_modules/@aria/core` is a real fetched-and-built copy of the `core-v0.2.0` tag, not a symlink to `packages/core`. Practically, this means: **any monorepo package that depends on another monorepo package via a git-tag URL needs that other package's tag re-cut and the dependent's URL updated before local changes to the depended-on package are reflected in the dependent's own tests or build.** Editing `packages/core/src/*.ts` alone does *not* change what `packages/adapter-corpflow`'s own local test run or build sees for `@aria/core` — only a fresh `core-vX` tag pointed at by an updated `adapter-corpflow/package.json` pin does. This is a structural consequence of mixing npm workspaces with git-tag-based external consumption inside the same monorepo, not a bug, and is out of scope to redesign here (e.g. making the same dependency simultaneously workspace-linkable and git-tag-consumable) — just something anyone editing `@aria/core` and expecting `adapter-corpflow`'s local suite to reflect it immediately needs to know.
 
 ## Deployment Requirement: Per-App API Keys
 
