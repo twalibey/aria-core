@@ -169,6 +169,27 @@ describe('QuerySpecExecutor', () => {
     });
   });
 
+  it.each([
+    [-5, 1],
+    [0, 1],
+    [2.7, 2],
+  ])('clamps a negative, zero, or non-integer LLM-supplied limit (%s) to a safe positive integer (%s)', async (rawLimit, expectedLimit) => {
+    const { log } = makeAuditLog();
+    let capturedPlan: ResolvedQueryPlan | undefined;
+    const runner = vi.fn(async (plan: ResolvedQueryPlan) => {
+      capturedPlan = plan;
+      return [];
+    });
+    const executor = new QuerySpecExecutor({ whitelist: makeWhitelist(), runner, securityAuditLog: log });
+
+    await executor.execute(
+      { table: 'donations', columns: ['id'], limit: rawLimit },
+      { tenantId: 'tenant-1' }
+    );
+
+    expect(capturedPlan?.limit).toBe(expectedLimit);
+  });
+
   it('never surfaces a raw error even when the security audit log itself fails during a legitimate violation path', async () => {
     const store = vi.fn().mockRejectedValue(new Error('audit log DB write failed'));
     const onCriticalViolation = vi.fn();

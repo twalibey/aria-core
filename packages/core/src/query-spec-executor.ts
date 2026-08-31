@@ -112,7 +112,12 @@ export class QuerySpecExecutor {
         tenantFilter: { ref: table.columns[table.tenantColumnKey].ref, value: tenant.tenantId },
         aggregation,
         sort,
-        limit: Math.min(descriptor.limit ?? this.defaultLimit, this.maxLimit),
+        // Clamp to at least 1 and floor to an integer — an LLM-supplied
+        // `limit` that's negative, zero, or non-integer would otherwise reach
+        // the runner as-is. This fails closed today via a DB-level rejection
+        // (or, depending on the driver, an unintended `LIMIT 0`/negative
+        // clause), but guarding it explicitly here is more robust.
+        limit: Math.max(1, Math.min(Math.floor(descriptor.limit ?? this.defaultLimit), this.maxLimit)),
       };
 
       const rows = await this.config.runner(plan);
