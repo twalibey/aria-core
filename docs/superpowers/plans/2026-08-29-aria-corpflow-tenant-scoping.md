@@ -754,6 +754,8 @@ export interface QuerySpecResult {
 }
 ```
 
+> **Superseded:** the code block above still shows `ResolvedQueryPlan.columns` as `columns: unknown[];`. What actually shipped is `columns: Array<{ key: string; ref: unknown }>` — each resolved column ref paired with its caller-facing whitelist key. A bare ref list loses the output column name a runner needs to build a real field-selection map (`db.select({ [key]: ref, ... })`); without the key, a runner has no way to name the projected column, which is exactly what let the shipped `v0.1.0` runner degrade into an effective `SELECT *` (see the next annotation below, and `packages/core/src/types.ts` / the "Breaking change in v0.2.0" note in `packages/core/README.md` for the real current shape).
+
 - [ ] **Step 4: Implement `QuerySpecExecutor`**
 
 ```typescript
@@ -1087,6 +1089,8 @@ Mirrors `packages/core/package.json`'s build/export shape (not adapter-fitness's
 }
 ```
 
+> **Superseded:** the shipped `packages/adapter-corpflow/package.json` no longer matches the block above. Current state (`v0.2.0`): `@aria/core` moved out of `dependencies` entirely and is now both a `devDependency` and a `peerDependency`, pinned to a literal git-tag URL (`github:twalibey/aria-core#core-v0.2.0`) rather than the workspace wildcard `"*"` shown here — because a consumer installing this package as an external dependency needs to install `@aria/core` itself too (see the peer/dev-dependency rationale in `packages/core/README.md`'s Versioning & Distribution section). `drizzle-orm` also moved out of `dependencies` to being both a `devDependency` and a `peerDependency` for the same reason (this package operates on the *consumer's* own Drizzle column/table objects, so it shouldn't force its own runtime copy on them — the same rationale that made `@aria/core` a peer dependency here). `version` is `"0.2.0"`, not `"0.0.0"`, and a `"prepare": "npm run build"` script was added (needed for this package to self-build on a git-tag install — see "Local package.json changes needed for git-tag installs" in `packages/core/README.md`).
+
 - [ ] **Step 2: Create `tsconfig.json`**
 
 Identical to `packages/core/tsconfig.json`:
@@ -1289,6 +1293,8 @@ export function createDrizzleQueryPlanRunner(db: DrizzleQueryable): QueryPlanRun
   };
 }
 ```
+
+> **Superseded — this is the shipped `SELECT *` defect, since fixed.** `return db.select().from(plan.tableRef).where(condition);` calls `db.select()` with no field-selection argument, which returns every column on the row — silently discarding all of `plan.columns`, `plan.aggregation`, `plan.sort`, and `plan.limit`. This shipped as `v0.1.0` and was found and fixed after the fact (see RISK-004 item 6 in `RISK-REGISTER.md`, and the "Behavior change in v0.2.0" note in `packages/adapter-corpflow/README.md`). The real, currently-shipped `createDrizzleQueryPlanRunner` in `packages/adapter-corpflow/src/query-plan-runner.ts` builds an explicit `fields` selection object from `plan.columns`/`plan.aggregation` (falling back to a single safe tenant-column-only projection if a plan somehow has neither), and always applies `.orderBy()` (when applicable) and `.limit()`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2019,6 +2025,8 @@ main().catch((err) => {
   process.exitCode = 1;
 });
 ```
+
+> **Superseded:** the script above's leak check — `const leaked = (result.rows ?? []).some((r) => r.tenant_id === TENANT_B);`, called only ever as `executor.execute(descriptor, { tenantId: TENANT_A })` — is tautological and unfalsifiable. `QuerySpecExecutor.execute()` sets `plan.tenantFilter.value` from the `TenantContext` argument WE pass in, never from the descriptor, so this mock `runner`'s `fakeRows[tenantId]` lookup can only ever return `TENANT_A`'s own row; no live model output could ever make `leaked` become `true`. The actually-shipped `packages/adapter-corpflow/scripts/live-tenant-scoping-smoke-test.ts` (commits `bdd42fb`, `e6ccc74`, `809eba6`) drops this unfalsifiable check, calls `executor.execute()` once per question **as each of two tenants**, and asserts instead on the real, falsifiable, live-model-dependent signal: whether the model's descriptor tried to smuggle a filter on the tenant column, and whether `QuerySpecExecutor` actually logged that attempt as an `llm_supplied_tenant_id` violation. See that file's own header comment for the full rationale.
 
 - [ ] **Step 2: Run it manually** (not part of automated CI — this is the point)
 
