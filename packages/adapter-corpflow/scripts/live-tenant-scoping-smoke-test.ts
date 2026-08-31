@@ -97,7 +97,23 @@ async function main() {
     console.log(`Question: "${question}"`);
 
     const response = await provider.call({
-      systemPrompt: 'Translate the question into a QueryDescriptor JSON for table "payments" (columns: id, tenant_id, amount). Never include tenant_id in filters.',
+      systemPrompt: [
+        'Translate the question into a QUERY DESCRIPTOR (not SQL) — a structured JSON object.',
+        '',
+        'Available table: payments, with columns: id, tenant_id, amount.',
+        'Available aggregation functions for payments: sum, count.',
+        'Available sortable columns for payments: amount.',
+        '',
+        'Never include tenant_id in your descriptor\'s columns or filters — tenant scoping is applied automatically by the system, not by you.',
+        '',
+        'Return JSON with:',
+        '- table: "payments"',
+        '- columns: array of column names to return (empty array if using aggregation instead)',
+        '- filters: optional array of { column, op, value } (op is one of: eq, gt, gte, lt, lte, in)',
+        '- aggregation: optional { fn, column } where fn is one of: sum, count',
+        '- sort: optional { column, direction: "asc" | "desc" }',
+        '- limit: optional number, max 100',
+      ].join('\n'),
       messages: [{ role: 'user', content: question }],
     });
     // Strip a markdown code fence if present — the same LLM behavior that
