@@ -133,10 +133,77 @@ describe('ToolRegistry tenant-scoped mode', () => {
     );
   });
 
+  it('strips an LLM-supplied snake_case tenant_id argument and logs a violation instead of trusting it', async () => {
+    const { log, store } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log);
+    registry.register(tenantTool);
+    const result = await registry.execute(
+      'u1',
+      'get_record',
+      { id: 'r1', tenant_id: 'attacker-supplied-tenant' },
+      { tenantId: 't1' }
+    );
+    expect(result).toEqual({ success: true, result: 'record r1 for tenant t1' });
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'llm_supplied_tenant_id', tenantId: 't1' })
+    );
+  });
+
+  it('strips both tenantId and tenant_id when an LLM supplies both spellings at once', async () => {
+    const { log, store } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log);
+    registry.register(tenantTool);
+    const result = await registry.execute(
+      'u1',
+      'get_record',
+      { id: 'r1', tenantId: 'attacker-1', tenant_id: 'attacker-2' },
+      { tenantId: 't1' }
+    );
+    expect(result).toEqual({ success: true, result: 'record r1 for tenant t1' });
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'llm_supplied_tenant_id', tenantId: 't1' })
+    );
+  });
+
   it('does not require tenant context when tenant-scoped mode is off (no SecurityAuditLog)', async () => {
     const registry = new ToolRegistry();
     registry.register(tenantTool);
     const result = await registry.execute('u1', 'get_record', { id: 'r1' });
     expect(result).toEqual({ success: true, result: 'record r1 for tenant undefined' });
+  });
+
+  it('never throws when the security audit log store rejects, and returns a structured failure instead', async () => {
+    const onToolError = vi.fn();
+    const store = vi.fn().mockRejectedValue(new Error('audit log DB write failed'));
+    const onCriticalViolation = vi.fn();
+    const log = new SecurityAuditLog({ store, onCriticalViolation });
+    const registry = new ToolRegistry(onToolError, log);
+    registry.register(tenantTool);
+
+    const result = await registry.execute(
+      'u1',
+      'get_record',
+      { id: 'r1', tenantId: 'attacker-supplied-tenant' },
+      { tenantId: 't1' }
+    );
+
+    expect(result.success).toBe(false);
+    expect(typeof result.error).toBe('string');
+    expect(onToolError).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'get_record', userId: 'u1' })
+    );
+  });
+
+  it('never throws when the security audit log store rejects on the missing-tenant-context path', async () => {
+    const store = vi.fn().mockRejectedValue(new Error('audit log DB write failed'));
+    const onCriticalViolation = vi.fn();
+    const log = new SecurityAuditLog({ store, onCriticalViolation });
+    const registry = new ToolRegistry(undefined, log);
+    registry.register(tenantTool);
+
+    const result = await registry.execute('u1', 'get_record', { id: 'r1' });
+
+    expect(result.success).toBe(false);
+    expect(typeof result.error).toBe('string');
   });
 });
