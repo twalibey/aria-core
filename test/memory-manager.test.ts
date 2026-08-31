@@ -177,6 +177,71 @@ describe('MemoryManager.maybeSummarize', () => {
     expect(memoryStore.saved[0]).toMatchObject({ memoryType: 'goal', content: 'Training for a 10k' });
   });
 
+  it('strips a markdown code fence with trailing prose after the closing fence', async () => {
+    const historyStore = new InMemoryHistoryStore();
+    await seedMessages(historyStore, 'u1', 10);
+    const memoryStore = makeMemoryStore();
+    const summarizerProvider: LLMProvider = {
+      async call() {
+        return {
+          content:
+            '```json\n[{"type": "goal", "content": "Training for a 10k"}]\n```\n\n' +
+            'Note: I excluded any tenant_id filter since that is applied automatically.',
+        };
+      },
+    };
+    const manager = new MemoryManager({ extractionPrompt: 'x', summarizerProvider, historyStore, memoryStore });
+
+    await manager.maybeSummarize('u1');
+
+    expect(memoryStore.saved).toHaveLength(1);
+    expect(memoryStore.saved[0]).toMatchObject({ memoryType: 'goal', content: 'Training for a 10k' });
+  });
+
+  it('strips a markdown code fence with leading prose before the opening fence', async () => {
+    const historyStore = new InMemoryHistoryStore();
+    await seedMessages(historyStore, 'u1', 10);
+    const memoryStore = makeMemoryStore();
+    const summarizerProvider: LLMProvider = {
+      async call() {
+        return {
+          content:
+            'Here is the extracted summary:\n\n```json\n[{"type": "goal", "content": "Training for a 10k"}]\n```',
+        };
+      },
+    };
+    const manager = new MemoryManager({ extractionPrompt: 'x', summarizerProvider, historyStore, memoryStore });
+
+    await manager.maybeSummarize('u1');
+
+    expect(memoryStore.saved).toHaveLength(1);
+    expect(memoryStore.saved[0]).toMatchObject({ memoryType: 'goal', content: 'Training for a 10k' });
+  });
+
+  it('instructs the summarizer to respond with only JSON and no surrounding prose', async () => {
+    const historyStore = new InMemoryHistoryStore();
+    await seedMessages(historyStore, 'u1', 10);
+    const memoryStore = makeMemoryStore();
+    let receivedSystemPrompt = '';
+    const summarizerProvider: LLMProvider = {
+      async call(params) {
+        receivedSystemPrompt = params.systemPrompt;
+        return { content: '[]' };
+      },
+    };
+    const manager = new MemoryManager({
+      extractionPrompt: 'Extract memories from this conversation.',
+      summarizerProvider,
+      historyStore,
+      memoryStore,
+    });
+
+    await manager.maybeSummarize('u1');
+
+    expect(receivedSystemPrompt).toContain('Extract memories from this conversation.');
+    expect(receivedSystemPrompt.toLowerCase()).toContain('only the json');
+  });
+
   it('guards against overlapping calls for the same user', async () => {
     const historyStore = new InMemoryHistoryStore();
     await seedMessages(historyStore, 'u1', 10);

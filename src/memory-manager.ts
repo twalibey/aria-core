@@ -18,7 +18,13 @@ const VALID_MEMORY_TYPES: AriaMemoryEntry['memoryType'][] = [
   'concern',
 ];
 
-const MARKDOWN_FENCE_RE = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/;
+// Unanchored on purpose: live models sometimes wrap JSON in a fence and then
+// append (or prepend) trailing prose outside it despite being told not to.
+// Searching for the fence anywhere in the string — rather than requiring it
+// to span the entire trimmed text — lets us still extract the JSON in that
+// case instead of failing to match at all and passing the raw text (prose
+// included) to JSON.parse.
+const MARKDOWN_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
 
 function stripMarkdownFence(text: string): string {
   const trimmed = text.trim();
@@ -64,7 +70,7 @@ export class MemoryManager {
 
       const conversationText = messages.map((m) => `[${m.role}]: ${m.content}`).join('\n');
       const response = await this.summarizerProvider.call({
-        systemPrompt: this.extractionPrompt,
+        systemPrompt: `${this.extractionPrompt}\n\nRespond with only the JSON — no markdown code fences, no explanation before or after it.`,
         messages: [{ role: 'user', content: conversationText }],
       });
 
