@@ -1400,14 +1400,20 @@ git commit -m "chore(release): bump @aria/core and @aria/adapter-corpflow to 0.4
 
 This is a real, external, shared-state action (pushing a branch and creating/pushing git tags to the public `github.com/twalibey/aria-core` repo). Present the plan: "Part 1/2 of the autonomous-agents work is done and tested locally. Part 3 (the actual Donor Response Agent in CorpFlow) needs new `v0.4.0` tags pushed so CorpFlow can consume them — same as tenant-scoping's mid-plan tag cuts. This needs two separate tag-push steps (core first, then adapter-corpflow once it's repinned to the new core tag). OK to proceed?" Wait for explicit confirmation before Step 4.
 
-- [ ] **Step 4: Push the branch and the `core` tag (only after confirmation)**
+- [ ] **Step 4: Push the branch, subtree-split `packages/core`, and tag the split commit — NOT the raw branch tip**
+
+**Second correction made during execution (2026-08-31):** the step below was originally a plain `git tag -a core-v0.4.0 -m "..."` on the worktree branch's own HEAD. That produces a tag whose tree root is the whole monorepo (package name `"aria"`, no `dist/`) — unusable by any external consumer, exactly the failure `packages/core/README.md`'s "Versioning & Distribution" section documents and warns against. Verified directly: `core-v0.3.0` (the tag CorpFlow's CI actually resolves successfully today) IS a proper subtree-split tag — `git clone --branch core-v0.3.0` gives `@aria/core` at the repo root, not the monorepo. Every tag cut in this plan must go through the same `git subtree split` step the README documents, not a raw tag.
 
 ```bash
 cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
 git push origin worktree-aria-corpflow-agents
-git tag -a core-v0.4.0 -m "core-v0.4.0: AgentRunner framework"
-git push origin core-v0.4.0
+NEW_SPLIT_COMMIT=$(git subtree split --prefix=packages/core)
+git branch -f release-core "$NEW_SPLIT_COMMIT"
+git tag -a core-v0.4.0 -m "core-v0.4.0: AgentRunner framework" release-core
+git push origin release-core core-v0.4.0
 ```
+
+Verify before continuing: `git clone --quiet --depth 1 --branch core-v0.4.0 https://github.com/twalibey/aria-core.git /tmp/core-v0.4.0-check && cat /tmp/core-v0.4.0-check/package.json | head -3` must show `"name": "@aria/core"` at the top level (not `"name": "aria"`), and `ls /tmp/core-v0.4.0-check` must show `src/`, `test/`, `package.json` directly (not a `packages/` subdirectory). Clean up the check clone afterward.
 
 - [ ] **Step 5: Repin `adapter-corpflow` to the now-existing `core` tag, reinstall, commit**
 
@@ -1422,14 +1428,20 @@ git add packages/adapter-corpflow/package.json package-lock.json
 git commit -m "fix(adapter-corpflow): repin @aria/core to published core-v0.4.0 tag"
 ```
 
-- [ ] **Step 6: Push the branch again and the `adapter-corpflow` tag**
+- [ ] **Step 6: Push the branch again, subtree-split `packages/adapter-corpflow`, and tag the split commit**
+
+Same correction as Step 4 — subtree split, not a raw tag.
 
 ```bash
 cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
 git push origin worktree-aria-corpflow-agents
-git tag -a adapter-corpflow-v0.4.0 -m "adapter-corpflow-v0.4.0: createDrizzleAgentActionStore"
-git push origin adapter-corpflow-v0.4.0
+NEW_SPLIT_COMMIT=$(git subtree split --prefix=packages/adapter-corpflow)
+git branch -f release-adapter-corpflow "$NEW_SPLIT_COMMIT"
+git tag -a adapter-corpflow-v0.4.0 -m "adapter-corpflow-v0.4.0: createDrizzleAgentActionStore" release-adapter-corpflow
+git push origin release-adapter-corpflow adapter-corpflow-v0.4.0
 ```
+
+Verify the same way as Step 4 before continuing (clone the tag, confirm `"name": "@aria/adapter-corpflow"` at the root, `src/`/`test/`/`package.json` directly present).
 
 (Two separate tags, matching the tenant-scoping precedent's own convention of one tag per package rather than one shared tag — `packages/core/README.md`'s documented dependency examples already assume this per-package tag naming.)
 
