@@ -88,19 +88,39 @@ export class AgentRunner {
     return { status, action: updated };
   }
 
-  // Placeholder for Task 4 — overridden in that task's diff, not left
-  // unimplemented in this codebase once Task 4 lands.
   private async runAutoExecute<Input>(
-    _definition: AgentDefinition<Input>,
-    _tenantId: string,
+    definition: AgentDefinition<Input>,
+    tenantId: string,
     claimed: AgentAction,
     draft: { draftContent: string; sourceSnapshot: Record<string, unknown> }
   ): Promise<AgentRunResult> {
+    const toolArgs = definition.buildToolArgs(draft);
+    const result = await this.toolRegistry.execute(
+      `agent:${definition.id}`,
+      definition.action.name,
+      toolArgs,
+      { tenantId }
+    );
+
+    if (!result.success) {
+      const updated = await this.actionStore.update(claimed.id, {
+        status: 'send_failed',
+        draftContent: draft.draftContent,
+        sourceSnapshot: draft.sourceSnapshot,
+      });
+      this.onError?.({
+        agentId: definition.id,
+        tenantId,
+        error: new Error(result.error ?? `Tool execution failed for ${definition.action.name}`),
+      });
+      return { status: 'send_failed', action: updated };
+    }
+
     const updated = await this.actionStore.update(claimed.id, {
-      status: 'pending_confirm',
+      status: 'auto_sent',
       draftContent: draft.draftContent,
       sourceSnapshot: draft.sourceSnapshot,
     });
-    return { status: 'pending_confirm', action: updated };
+    return { status: 'auto_sent', action: updated };
   }
 }
