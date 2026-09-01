@@ -39,6 +39,13 @@ export class AgentRunner {
       return { status: 'skipped_already_claimed' };
     }
 
+    // Defense-in-depth: even if the store ever (re-)returns a terminal
+    // needs_attention row, never call the LLM against it — retry cap is 3
+    // attempts, not infinite retry.
+    if (claimed.status === 'needs_attention') {
+      return { status: 'needs_attention', action: claimed };
+    }
+
     let draft;
     try {
       const { systemPrompt, userPrompt } = definition.buildPrompt(input);
