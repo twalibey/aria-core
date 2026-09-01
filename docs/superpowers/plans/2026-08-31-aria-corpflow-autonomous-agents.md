@@ -1445,6 +1445,8 @@ Verify the same way as Step 4 before continuing (clone the tag, confirm `"name":
 
 (Two separate tags, matching the tenant-scoping precedent's own convention of one tag per package rather than one shared tag — `packages/core/README.md`'s documented dependency examples already assume this per-package tag naming.)
 
+**Third correction made during execution (2026-08-31):** attempting Step 7 found `core-v0.4.0` itself has a real standalone-build defect — `packages/core/package.json` has no `@types/node` devDependency, but Task 2's `agent-action-store-in-memory.ts` imports `node:crypto` (the first file in `packages/core/src` to need it). This is invisible inside the monorepo (hoisted from elsewhere) but breaks `tsc`/`tsup` for an external consumer building the subtree-split tag standalone, with nothing to hoist from. Fixed by adding `"@types/node": "^20.19.0"` (matching the root's own version) to `packages/core/package.json`'s `devDependencies`, then re-cutting `core-v0.4.0` a third time (same tag name, corrected content) — delete, re-subtree-split, re-tag, re-push, following the exact same procedure as Step 4's original re-cut. `adapter-corpflow-v0.4.0` does not need re-cutting (its own `package.json` already lists `@types/node` and doesn't need this fix), but does need re-cutting anyway IF its `package-lock.json`/build output changes as a side effect of core's dist changing shape — check before assuming it's unaffected.
+
 - [ ] **Step 7: Repin CorpFlow's own dependency and reinstall (in the CorpFlow repo/worktree, not this one)**
 
 ```bash
