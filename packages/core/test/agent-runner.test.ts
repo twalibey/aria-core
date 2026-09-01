@@ -233,4 +233,49 @@ describe('AgentRunner.run', () => {
     const statuses = [first.status, second.status].sort();
     expect(statuses).toEqual(['pending_confirm', 'skipped_already_claimed']);
   });
+
+  it('executes the tool and writes auto_sent when autonomy is auto and the tool succeeds', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async (_userId, args) => `sent: ${(args as { content: string }).content}`,
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition({ checkAutonomy: async () => 'auto' });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('auto_sent');
+    expect(result.action?.draftContent).toBe('Thanks Ada!');
+  });
+
+  it('writes send_failed when autonomy is auto and the tool execution fails', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async () => {
+        throw new Error('email provider down');
+      },
+    });
+    const onError = vi.fn();
+    const runner = new AgentRunner(llm, registry, store, onError);
+    const definition = makeDefinition({ checkAutonomy: async () => 'auto' });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('send_failed');
+    expect(onError).toHaveBeenCalled();
+  });
 });
