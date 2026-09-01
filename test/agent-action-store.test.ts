@@ -56,7 +56,7 @@ const NOW_ROW = {
 
 describe('createDrizzleAgentActionStore', () => {
   describe('claim', () => {
-    it('inserts a new processing row and maps snake_case columns to the AgentAction shape', async () => {
+    it('inserts a new processing row and maps the row to the AgentAction shape', async () => {
       const { db, insertValues, onConflictDoNothing } = makeDb({ insertReturns: [NOW_ROW] });
       const table = makeTableRef();
       const store = createDrizzleAgentActionStore(db as any, table);
@@ -71,6 +71,20 @@ describe('createDrizzleAgentActionStore', () => {
       expect(action).not.toBeNull();
       expect(action!.id).toBe('action-1');
       expect(action!.status).toBe('processing');
+      expect(action).toEqual({
+        id: NOW_ROW.id,
+        tenantId: NOW_ROW.tenantId,
+        agentId: NOW_ROW.agentId,
+        sourceType: NOW_ROW.sourceType,
+        sourceId: NOW_ROW.sourceId,
+        status: NOW_ROW.status,
+        draftContent: NOW_ROW.draftContent,
+        sourceSnapshot: NOW_ROW.sourceSnapshot,
+        attemptCount: NOW_ROW.attemptCount,
+        confirmedByUserId: NOW_ROW.confirmedByUserId,
+        createdAt: NOW_ROW.createdAt,
+        updatedAt: NOW_ROW.updatedAt,
+      });
       expect(insertValues).toHaveBeenCalledWith(
         expect.objectContaining({ tenantId: 'tenant-1', agentId: 'donor-response', status: 'processing' })
       );
@@ -128,6 +142,20 @@ describe('createDrizzleAgentActionStore', () => {
       const result = await store.get('action-1');
 
       expect(result?.id).toBe('action-1');
+      expect(result).toEqual({
+        id: NOW_ROW.id,
+        tenantId: NOW_ROW.tenantId,
+        agentId: NOW_ROW.agentId,
+        sourceType: NOW_ROW.sourceType,
+        sourceId: NOW_ROW.sourceId,
+        status: NOW_ROW.status,
+        draftContent: NOW_ROW.draftContent,
+        sourceSnapshot: NOW_ROW.sourceSnapshot,
+        attemptCount: NOW_ROW.attemptCount,
+        confirmedByUserId: NOW_ROW.confirmedByUserId,
+        createdAt: NOW_ROW.createdAt,
+        updatedAt: NOW_ROW.updatedAt,
+      });
       expect(selectWhere).toHaveBeenCalledWith(eq(table.id, 'action-1'));
     });
 
