@@ -1376,42 +1376,59 @@ that next."
 - Modify: `packages/adapter-corpflow/package.json` (version bump; also revert the `"*"` workspace-link change from Task 7's Step 0 back to a real git-tag-shaped dependency string, now pointing at the new tag about to be cut)
 - Modify (in the CorpFlow repo, not this one): `package.json`, `package-lock.json`
 
+**Sequencing correction made during execution (2026-08-31):** the original Step 3/4/6 order was broken — it tried to repin `adapter-corpflow`'s `@aria/core` dependency to `core-v0.4.0` and `npm install` it (Step 3/4) *before* that tag actually existed on the remote (only created in the original Step 6). A dispatched implementer correctly caught this (`npm ls` after the repin would fail — nothing to resolve), refused to fake a tag or leave the dependency broken, and left the worktree clean. Real constraint: `adapter-corpflow`'s own tag can only be cut *after* it's repinned to the *already-pushed* `core` tag — because an external consumer (CorpFlow) resolving `@aria/adapter-corpflow` from a tag will read that package's own `package.json` and try to resolve its `@aria/core` dependency too; a workspace-only `"*"` spec is meaningless outside this monorepo. This means two separate tag-push moments, not one combined step — corrected below.
+
 - [ ] **Step 1: Confirm the whole ARIA workspace is green**
 
-Run: `cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA" && npm test && npm run typecheck`
-Expected: all green (this re-confirms Tasks 1-7's combined state, not just each task's own isolated run)
+Run: `cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents" && npm test && npm run typecheck`
+Expected: all green (this re-confirms Tasks 1-7's combined state, not just each task's own isolated run). **Run this from the worktree's own root, not the main checkout** — an earlier version of this step pointed at the wrong path; worktrees have independent working directories and do not share files.
 
-- [ ] **Step 2: Bump both package versions**
+**Known, pre-existing, unrelated flakiness (found and worked around during Task 7.5's first attempt, reproducible on untouched `HEAD` too, not caused by this task):** a plain `npm install` from a fully clean state can race `packages/adapter-corpflow`'s `prepare`/`build` script against npm's workspace-symlink creation for `@aria/core`, causing an intermittent `TS2305` failure unrelated to any code change. If a clean reinstall in this task hits that error, use: `npm install --ignore-scripts`, then `npm run build --workspace=packages/core`, then retry the normal install/build — do not treat this specific failure mode as a real defect in this task's own work.
 
-In `packages/core/package.json` and `packages/adapter-corpflow/package.json`, bump `"version"` from `"0.3.0"` to `"0.4.0"` in both files (a minor bump — this adds new exports, doesn't break `v0.3.0`'s existing API surface).
+- [ ] **Step 2: Bump both package versions, commit (adapter-corpflow's `@aria/core` dependency stays `"*"` for now)**
 
-- [ ] **Step 3: Revert `adapter-corpflow`'s `@aria/core` dependency to a real git-tag pin**
-
-In `packages/adapter-corpflow/package.json`, change `"@aria/core": "*"` (set in Task 7's Step 0) back to `"@aria/core": "github:twalibey/aria-core#core-v0.4.0"` in both `dependencies` and `peerDependencies`. This is the moment that temporary local-dev change gets undone, as flagged in Task 7.
-
-- [ ] **Step 4: Commit the version bumps**
+In `packages/core/package.json` and `packages/adapter-corpflow/package.json`, bump `"version"` from `"0.3.0"` to `"0.4.0"` in both files. Do **not** touch `adapter-corpflow`'s `@aria/core` dependency spec yet — it stays `"*"` (from Task 7's Step 0) for this commit; repinning it happens in Step 5, after the `core` tag actually exists.
 
 ```bash
-cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA"
-rm -rf node_modules package-lock.json packages/adapter-corpflow/node_modules
-npm install
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
 npm test && npm run typecheck
-git add packages/core/package.json packages/adapter-corpflow/package.json package-lock.json
+git add packages/core/package.json packages/adapter-corpflow/package.json
 git commit -m "chore(release): bump @aria/core and @aria/adapter-corpflow to 0.4.0"
 ```
 
-- [ ] **Step 5: STOP — ask the user before creating or pushing a tag**
+- [ ] **Step 3: STOP — ask the user before pushing anything**
 
-This is a real, external, shared-state action (creating and pushing a git tag to the public `github.com/twalibey/aria-core` repo). Present the plan: "Part 1/2 of the autonomous-agents work is done and tested locally. Part 3 (the actual Donor Response Agent in CorpFlow) needs a new `v0.4.0` tag pushed so CorpFlow can consume it — same as tenant-scoping's mid-plan tag cuts. OK to push this branch and tag its HEAD?" Wait for explicit confirmation before Step 6.
+This is a real, external, shared-state action (pushing a branch and creating/pushing git tags to the public `github.com/twalibey/aria-core` repo). Present the plan: "Part 1/2 of the autonomous-agents work is done and tested locally. Part 3 (the actual Donor Response Agent in CorpFlow) needs new `v0.4.0` tags pushed so CorpFlow can consume them — same as tenant-scoping's mid-plan tag cuts. This needs two separate tag-push steps (core first, then adapter-corpflow once it's repinned to the new core tag). OK to proceed?" Wait for explicit confirmation before Step 4.
 
-- [ ] **Step 6: Push the branch and tag (only after confirmation)**
+- [ ] **Step 4: Push the branch and the `core` tag (only after confirmation)**
 
 ```bash
 cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
 git push origin worktree-aria-corpflow-agents
 git tag -a core-v0.4.0 -m "core-v0.4.0: AgentRunner framework"
+git push origin core-v0.4.0
+```
+
+- [ ] **Step 5: Repin `adapter-corpflow` to the now-existing `core` tag, reinstall, commit**
+
+In `packages/adapter-corpflow/package.json`, change `"@aria/core": "*"` (set in Task 7's Step 0) to `"@aria/core": "github:twalibey/aria-core#core-v0.4.0"` in both `devDependencies` and `peerDependencies` (confirmed by Task 7's review: no plain `dependencies` block exists for it).
+
+```bash
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
+rm -rf node_modules package-lock.json packages/adapter-corpflow/node_modules
+npm install
+npm test && npm run typecheck
+git add packages/adapter-corpflow/package.json package-lock.json
+git commit -m "fix(adapter-corpflow): repin @aria/core to published core-v0.4.0 tag"
+```
+
+- [ ] **Step 6: Push the branch again and the `adapter-corpflow` tag**
+
+```bash
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
+git push origin worktree-aria-corpflow-agents
 git tag -a adapter-corpflow-v0.4.0 -m "adapter-corpflow-v0.4.0: createDrizzleAgentActionStore"
-git push origin core-v0.4.0 adapter-corpflow-v0.4.0
+git push origin adapter-corpflow-v0.4.0
 ```
 
 (Two separate tags, matching the tenant-scoping precedent's own convention of one tag per package rather than one shared tag — `packages/core/README.md`'s documented dependency examples already assume this per-package tag naming.)
