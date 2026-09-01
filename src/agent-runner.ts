@@ -83,6 +83,9 @@ export class AgentRunner {
   ): Promise<AgentAction> {
     const existing = await this.actionStore.get(actionId);
     if (!existing) throw new Error(`AgentAction not found: ${actionId}`);
+    if (existing.tenantId !== tenantId) {
+      throw new Error(`AgentAction not found: ${actionId}`);
+    }
 
     const content = opts?.editedContent ?? existing.draftContent ?? '';
     const draft = { draftContent: content, sourceSnapshot: existing.sourceSnapshot ?? {} };
@@ -110,6 +113,9 @@ export class AgentRunner {
   async reject(actionId: string, tenantId: string): Promise<AgentAction> {
     const existing = await this.actionStore.get(actionId);
     if (!existing) throw new Error(`AgentAction not found: ${actionId}`);
+    if (existing.tenantId !== tenantId) {
+      throw new Error(`AgentAction not found: ${actionId}`);
+    }
     return this.actionStore.update(actionId, { status: 'rejected' });
   }
 

@@ -470,6 +470,38 @@ describe('AgentRunner.confirmAndExecute', () => {
       runner.confirmAndExecute(definition, 'does-not-exist', 'tenant-1', 'staff-user-1')
     ).rejects.toThrow();
   });
+
+  it('throws the identical "AgentAction not found" error (not a distinct message) when the action exists but belongs to a different tenant, and never executes the tool or updates the action', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async () => 'ok',
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    // Action is genuinely created and persisted under tenant-1.
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    // Spy only after the setup run() above, so these spies capture exactly
+    // what confirmAndExecute itself does, not the writes run() made.
+    const executeSpy = vi.spyOn(registry, 'execute');
+    const updateSpy = vi.spyOn(store, 'update');
+
+    // A different tenant (tenant-2) attempts to confirm tenant-1's action.
+    await expect(
+      runner.confirmAndExecute(definition, pending.action!.id, 'tenant-2', 'staff-user-1')
+    ).rejects.toThrow(`AgentAction not found: ${pending.action!.id}`);
+
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('AgentRunner.reject', () => {
@@ -486,5 +518,29 @@ describe('AgentRunner.reject', () => {
 
     expect(rejected.status).toBe('rejected');
     expect(executeSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws the identical "AgentAction not found" error (not a distinct message) when the action exists but belongs to a different tenant, and leaves its status unchanged', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    // Action is genuinely created and persisted under tenant-1.
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    // Spy only after the setup run() above, so this spy captures exactly
+    // what reject itself does, not the write run() made.
+    const updateSpy = vi.spyOn(store, 'update');
+
+    // A different tenant (tenant-2) attempts to reject tenant-1's action.
+    await expect(
+      runner.reject(pending.action!.id, 'tenant-2')
+    ).rejects.toThrow(`AgentAction not found: ${pending.action!.id}`);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    const stored = await store.get(pending.action!.id);
+    expect(stored?.status).toBe('pending_confirm');
   });
 });
