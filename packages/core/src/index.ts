@@ -23,3 +23,16 @@ export { SecurityAuditLog } from './security-audit-log.js';
 export type { SecurityAuditLogConfig } from './security-audit-log.js';
 export { QuerySpecExecutor } from './query-spec-executor.js';
 export type { QuerySpecExecutorConfig } from './query-spec-executor.js';
+export { AgentRunner } from './agent-runner.js';
+export { InMemoryAgentActionStore } from './agent-action-store-in-memory.js';
+export { stripMarkdownFence } from './fence-parser.js';
+export type {
+  AutonomyLevel,
+  AgentActionStatus,
+  AgentAction,
+  AgentDraftOutput,
+  AgentActionStore,
+  AgentDefinition,
+  AgentErrorHook,
+  AgentRunResult,
+} from './agent-types.js';
