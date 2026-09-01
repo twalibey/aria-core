@@ -16,7 +16,7 @@
 - `@aria/adapter-corpflow` stays schema-agnostic — no import of CorpFlow's real `schema.ts`, only generic, structurally-typed factories (mirrors `query-plan-runner.ts`'s `DrizzleQueryable` pattern exactly).
 - Every new adapter-corpflow test that touches Drizzle must use real `drizzle-orm` operator functions (`eq`, `and`, etc.) against a fake `vi.fn()`-based db chain — never a hand-rolled fake condition object — matching `query-plan-runner.test.ts`'s established convention.
 - Full workspace test suite (`npm test`) and full workspace typecheck (`npm run typecheck`, which runs `tsc -b --noEmit` plus `vitest --typecheck.only`) must pass before any task is considered done — this project has been bitten twice by fixes that pass one package's tests but break the workspace-wide typecheck.
-- No task in this plan bumps `@aria/core`/`@aria/adapter-corpflow`'s published version or retags — that happens later, as its own step, once CorpFlow actually needs to consume the new code via its git-tag pin (same deferral already made for the `MemoryManager` fence fix earlier this project).
+- **Correction made during pre-flight (2026-08-31), replacing an earlier draft of this constraint:** unlike the standalone `MemoryManager` fence fix (which had no real consumer and could defer its tag indefinitely), CorpFlow's own Tasks 9-15 in Part 3 are the direct, real consumer of the new `@aria/core`/`@aria/adapter-corpflow` code — without a new tag, those tasks cannot resolve `AgentRunner`, `createDrizzleAgentActionStore`, or the new agent types at all. A version bump and tag ARE required partway through this plan, at Task 7.5 (between Parts 2 and 3), mirroring exactly how the tenant-scoping pillar cut `v0.1.0`→`v0.2.0`→`v0.3.0` mid-plan for the same reason. Creating and pushing a git tag is a real, external, shared-state action — Task 7.5 stops and asks the user before doing it, same as the tenant-scoping precedent's own Task 9.
 - Donor Response Agent processes every donation submission — no dollar threshold (per-project decision, 2026-08-31).
 - The agent's follow-up email is treated as transactional (tied to the specific gift just made) — no separate consent/opt-out mechanism in this plan. RISK-005 is filed for this in Task 15.
 - `agent_actions`'s `(source_type, source_id, agent_id)` triple is UNIQUE — this is the atomic claim mechanism. No task may bypass it with a separate lock or flag.
@@ -1026,6 +1026,8 @@ git commit -m "feat(core): export agent framework from public API, document in R
 
 ## Part 2 — `@aria/adapter-corpflow`
 
+**Pre-flight note (caught before dispatch, 2026-08-31):** `packages/adapter-corpflow/package.json` pins `@aria/core` via a git-tag URL (`github:twalibey/aria-core#core-v0.3.0`), not a workspace link — unlike `adapter-example`/`adapter-fitness`, which both use `"@aria/core": "*"` and pick up local workspace changes automatically. This is a known, previously-bitten gotcha in this exact project (the tenant-scoping pillar's final review found its own "end-to-end" test was unknowingly running against a stale published tag for the same reason). Left as-is, Task 7 would test against `v0.3.0` — which has none of Tasks 1-6's new code — not local changes. Task 7's Step 0 below fixes this for local development; it is not part of any future external-tag/publish step and must not be treated as one.
+
 ### Task 7: `createDrizzleAgentActionStore` factory
 
 **Files:**
@@ -1038,6 +1040,20 @@ git commit -m "feat(core): export agent framework from public API, document in R
 - Produces (consumed by CorpFlow's Task 9): `createDrizzleAgentActionStore(db: DrizzleAgentActionQueryable, table: AgentActionsTableRef): AgentActionStore`, and the `DrizzleAgentActionQueryable`/`AgentActionsTableRef` types themselves (exported so CorpFlow's call site can type its real `db`/table correctly).
 
 **Design note (mirrors `query-plan-runner.ts`'s established pattern exactly):** this factory takes a minimal structural interface for the Drizzle chains it actually calls (`insert`/`update`/`select`), and a generic `table` reference object with named column refs — it never imports CorpFlow's real `schema.ts`. CorpFlow supplies its real `db` and real `agentActions` table object (from Task 8's migration) when it calls this factory (Task 9).
+
+- [ ] **Step 0: Fix `@aria/core` resolution for local development**
+
+In `packages/adapter-corpflow/package.json`, change both occurrences of `"@aria/core": "github:twalibey/aria-core#core-v0.3.0"` (in `dependencies` and `peerDependencies`, or wherever both appear — check the file) to `"@aria/core": "*"`, matching `adapter-example`/`adapter-fitness`'s existing local-dev convention exactly. Then, from the workspace root:
+
+```bash
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA"
+rm -rf node_modules package-lock.json packages/adapter-corpflow/node_modules
+npm install
+```
+
+Run: `npm ls @aria/core` and confirm `packages/adapter-corpflow` now resolves `@aria/core` to the local workspace `packages/core` (a `link:` or workspace-relative resolution in the output), not a git URL.
+
+**This package.json change is temporary, for this plan's local development only — do not commit it as a permanent fix.** It must be reverted back to the real git-tag pin before any future step that cuts a new `@aria/core`/`@aria/adapter-corpflow` tag for CorpFlow to actually consume externally (out of scope for this plan per the Global Constraints — no task here bumps version or retags). Leave a note in this task's commit message flagging the revert as a follow-up, and do not let a later task in this plan quietly re-commit the git-tag version without reverting it back to workspace-linked first.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1337,8 +1353,97 @@ Expected: build succeeds, typecheck clean
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/adapter-corpflow/src/agent-action-store.ts packages/adapter-corpflow/test/agent-action-store.test.ts packages/adapter-corpflow/src/index.ts
-git commit -m "feat(adapter-corpflow): add createDrizzleAgentActionStore factory"
+git add packages/adapter-corpflow/src/agent-action-store.ts packages/adapter-corpflow/test/agent-action-store.test.ts packages/adapter-corpflow/src/index.ts packages/adapter-corpflow/package.json package-lock.json
+git commit -m "feat(adapter-corpflow): add createDrizzleAgentActionStore factory
+
+Also switches adapter-corpflow's @aria/core dependency from its
+git-tag pin to a workspace link (\"*\"), matching adapter-example and
+adapter-fitness, so local development resolves against this branch's
+own core changes instead of the stale published tag. Must be
+reverted back to a git-tag pin before any future external tag/publish
+of these packages - not part of this task, flagged for whoever does
+that next."
+```
+
+---
+
+### Task 7.5: Version bump, tag, and CorpFlow repin (stop-and-ask checkpoint)
+
+**Why this task exists:** Part 3's tasks (9 onward) import `AgentRunner`, `createDrizzleAgentActionStore`, and the new agent types from `@aria/core`/`@aria/adapter-corpflow` — none of which exist in the currently-published `v0.3.0` tag. CorpFlow consumes these packages via a git-tag pin (`github:twalibey/aria-core#core-v0.3.0`), a separate repo from this one, so Part 3 cannot proceed without a new tag CorpFlow can point at. This is not optional infrastructure cleanup — it is a real, hard dependency of every task after this one.
+
+**Files:**
+- Modify: `packages/core/package.json` (version bump)
+- Modify: `packages/adapter-corpflow/package.json` (version bump; also revert the `"*"` workspace-link change from Task 7's Step 0 back to a real git-tag-shaped dependency string, now pointing at the new tag about to be cut)
+- Modify (in the CorpFlow repo, not this one): `package.json`, `package-lock.json`
+
+- [ ] **Step 1: Confirm the whole ARIA workspace is green**
+
+Run: `cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA" && npm test && npm run typecheck`
+Expected: all green (this re-confirms Tasks 1-7's combined state, not just each task's own isolated run)
+
+- [ ] **Step 2: Bump both package versions**
+
+In `packages/core/package.json` and `packages/adapter-corpflow/package.json`, bump `"version"` from `"0.3.0"` to `"0.4.0"` in both files (a minor bump — this adds new exports, doesn't break `v0.3.0`'s existing API surface).
+
+- [ ] **Step 3: Revert `adapter-corpflow`'s `@aria/core` dependency to a real git-tag pin**
+
+In `packages/adapter-corpflow/package.json`, change `"@aria/core": "*"` (set in Task 7's Step 0) back to `"@aria/core": "github:twalibey/aria-core#core-v0.4.0"` in both `dependencies` and `peerDependencies`. This is the moment that temporary local-dev change gets undone, as flagged in Task 7.
+
+- [ ] **Step 4: Commit the version bumps**
+
+```bash
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA"
+rm -rf node_modules package-lock.json packages/adapter-corpflow/node_modules
+npm install
+npm test && npm run typecheck
+git add packages/core/package.json packages/adapter-corpflow/package.json package-lock.json
+git commit -m "chore(release): bump @aria/core and @aria/adapter-corpflow to 0.4.0"
+```
+
+- [ ] **Step 5: STOP — ask the user before creating or pushing a tag**
+
+This is a real, external, shared-state action (creating and pushing a git tag to the public `github.com/twalibey/aria-core` repo). Present the plan: "Part 1/2 of the autonomous-agents work is done and tested locally. Part 3 (the actual Donor Response Agent in CorpFlow) needs a new `v0.4.0` tag pushed so CorpFlow can consume it — same as tenant-scoping's mid-plan tag cuts. OK to push this branch and tag its HEAD?" Wait for explicit confirmation before Step 6.
+
+- [ ] **Step 6: Push the branch and tag (only after confirmation)**
+
+```bash
+cd "/Users/mrdrdaddy/Desktop/Warp Projects/ARIA/.claude/worktrees/aria-corpflow-agents"
+git push origin worktree-aria-corpflow-agents
+git tag -a core-v0.4.0 -m "core-v0.4.0: AgentRunner framework"
+git tag -a adapter-corpflow-v0.4.0 -m "adapter-corpflow-v0.4.0: createDrizzleAgentActionStore"
+git push origin core-v0.4.0 adapter-corpflow-v0.4.0
+```
+
+(Two separate tags, matching the tenant-scoping precedent's own convention of one tag per package rather than one shared tag — `packages/core/README.md`'s documented dependency examples already assume this per-package tag naming.)
+
+- [ ] **Step 7: Repin CorpFlow's own dependency and reinstall (in the CorpFlow repo/worktree, not this one)**
+
+```bash
+cd "/Users/mrdrdaddy/.config/superpowers/worktrees/corpflow/aria-agents"
+```
+
+In that repo's `package.json`, change:
+```
+"@aria/core": "github:twalibey/aria-core#core-v0.3.0"
+"@aria/adapter-corpflow": "github:twalibey/aria-core#adapter-corpflow-v0.3.0"
+```
+to:
+```
+"@aria/core": "github:twalibey/aria-core#core-v0.4.0"
+"@aria/adapter-corpflow": "github:twalibey/aria-core#adapter-corpflow-v0.4.0"
+```
+
+Then:
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npm ls @aria/core @aria/adapter-corpflow
+```
+Expected: both resolve to `0.4.0`. If npm still resolves the old tag, this is the exact "editing the git-tag spec string does not force re-resolution" gotcha already documented in project memory — a full clean reinstall (already done above) is the fix; if it persists, check `package-lock.json` was actually deleted, not just regenerated from a cached lockfile entry.
+
+```bash
+git add package.json package-lock.json
+git commit -m "chore: bump @aria/core and @aria/adapter-corpflow to 0.4.0"
 ```
 
 ---
@@ -1347,7 +1452,7 @@ git commit -m "feat(adapter-corpflow): add createDrizzleAgentActionStore factory
 
 **Repo for all remaining tasks:** `/Users/mrdrdaddy/Desktop/AI Learning Journey /Coding Projects/CorpFlow/corpflow` (confirmed the current real location, 2026-08-31 — verify with `git remote -v` before starting in case it moves again).
 
-**Before Task 8:** bump CorpFlow's `@aria/core`/`@aria/adapter-corpflow` git-tag dependency once Part 1/2 are tagged (this plan does not tag — see Global Constraints). Task 8 assumes the new exports from Tasks 6–7 are already resolvable; if the tag hasn't been cut yet when this task starts, that is a real blocker to flag, not to route around.
+**Before Task 8:** Task 7.5 must be complete — CorpFlow's `@aria/core`/`@aria/adapter-corpflow` dependency repinned to the new tag and reinstalled. Task 8 assumes the new exports are already resolvable; if Task 7.5 hasn't run yet, that is a real blocker to flag, not to route around.
 
 ### Task 8: `agent_actions` and `tenant_agent_settings` migration + Drizzle schema
 
