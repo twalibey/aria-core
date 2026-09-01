@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { AgentRunner } from '../src/agent-runner';
 import { InMemoryAgentActionStore } from '../src/agent-action-store-in-memory';
 import { ToolRegistry } from '../src/tools';
-import type { AgentDefinition, AgentDraftOutput } from '../src/agent-types';
+import type { AgentAction, AgentActionStore, AgentDefinition, AgentDraftOutput } from '../src/agent-types';
 import type { LLMProvider } from '../src/types';
 
 interface FakeInput {
@@ -132,6 +132,80 @@ describe('AgentRunner.run', () => {
 
     expect(result.status).toBe('needs_attention');
     expect(result.action?.attemptCount).toBe(3);
+  });
+
+  it('does not reprocess a row already at needs_attention status: no further LLM call, no infinite retry', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    // Get a row into terminal needs_attention state first, mirroring how
+    // test 6 sets up attemptCount via claim() + update() — but explicitly
+    // setting status: 'needs_attention' this time, not just attemptCount.
+    const claimed = await store.claim({
+      tenantId: 'tenant-1',
+      agentId: 'test-agent',
+      sourceType: 'test_source',
+      sourceId: 'sub-1',
+    });
+    await store.update(claimed!.id, { status: 'needs_attention', attemptCount: 3 });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    // With the store-level fix, claim() itself now excludes needs_attention
+    // rows and returns null for them, so run() short-circuits at the
+    // pre-existing "already claimed" branch and never reaches the LLM call
+    // or the runner's own defense-in-depth check below. Either way, the
+    // critical property holds: the LLM is never called again, and the row
+    // is never silently reprocessed forever.
+    expect(result.status).toBe('skipped_already_claimed');
+    expect(llm.call).not.toHaveBeenCalled();
+
+    // The underlying row itself remains untouched at needs_attention.
+    const stored = await store.get(claimed!.id);
+    expect(stored?.status).toBe('needs_attention');
+    expect(stored?.attemptCount).toBe(3);
+  });
+
+  it('AgentRunner defense-in-depth: if a store implementation ever (re-)returns a needs_attention row from claim(), run() still refuses to call the LLM and returns needs_attention immediately', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const registry = new ToolRegistry();
+    const definition = makeDefinition();
+
+    const needsAttentionAction: AgentAction = {
+      id: 'action-1',
+      tenantId: 'tenant-1',
+      agentId: 'test-agent',
+      sourceType: 'test_source',
+      sourceId: 'sub-1',
+      status: 'needs_attention',
+      draftContent: null,
+      sourceSnapshot: null,
+      attemptCount: 3,
+      confirmedByUserId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // A deliberately non-compliant store stand-in: unlike
+    // InMemoryAgentActionStore, its claim() does NOT exclude needs_attention
+    // rows. This isolates and proves AgentRunner's own defense-in-depth
+    // check, independent of whether the store gates correctly.
+    const laxStore: AgentActionStore = {
+      claim: async () => needsAttentionAction,
+      update: async () => needsAttentionAction,
+      get: async () => needsAttentionAction,
+    };
+
+    const runner = new AgentRunner(llm, registry, laxStore);
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('needs_attention');
+    expect(result.action).toBe(needsAttentionAction);
+    expect(llm.call).not.toHaveBeenCalled();
   });
 
   it('near-simultaneous run() calls for the same source result in exactly one claim, not two drafts', async () => {

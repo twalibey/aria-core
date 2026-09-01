@@ -19,11 +19,14 @@ export class InMemoryAgentActionStore implements AgentActionStore {
     const existingActionId = this.claimIndex.get(key);
     if (existingActionId) {
       const existingAction = this.actions.get(existingActionId);
-      if (existingAction && existingAction.attemptCount > 0) {
-        // Allow re-claiming for retry scenarios (when attemptCount > 0)
+      if (existingAction && existingAction.status !== 'needs_attention' && existingAction.attemptCount > 0) {
+        // Allow re-claiming for retry scenarios (when attemptCount > 0), but
+        // never a row that has already terminally escalated to
+        // needs_attention — that would re-process it forever.
         return existingAction;
       }
-      // Concurrent claim attempt (attemptCount == 0), not allowed
+      // Concurrent claim attempt (attemptCount == 0), or a terminal
+      // needs_attention row, not allowed to be (re-)claimed.
       return null;
     }
 
