@@ -14,6 +14,24 @@ Tool handlers must derive all data scope from the `userId` parameter (and, in te
 
 When tenant-scoped mode is on, `ToolRegistry.execute()` also strips any of the known tenant-identity spellings (`tenantId`, `tenant_id`) an LLM-calling tool tries to pass in `args`, logging an `llm_supplied_tenant_id` violation each time, rather than trusting it — the real tenant always comes from the `TenantContext` parameter, never from the tool call arguments.
 
+## Agent Framework
+
+`AgentRunner` orchestrates autonomous agent execution with three configurable autonomy levels, each controlling how far the agent proceeds without human intervention:
+
+- **`off`**: No LLM call at all. The agent does not run; the caller receives immediate feedback that autonomy is disabled.
+- **`confirm`**: Draft only, held for human approval. The agent calls the LLM to generate a draft action (e.g., a message or code change) but stops before executing it. A human must review and approve the draft before it is applied.
+- **`auto`**: Drafts and executes immediately. The agent calls the LLM to generate a draft action, then executes it without waiting for human approval.
+
+### Claim mechanism and atomicity
+
+Agent execution uses a claim-based concurrency model to ensure that multiple runners do not execute overlapping actions for the same source. `AgentActionStore.claim()` attempts to atomically claim a pending action for execution. For this guarantee to hold at the storage layer, the backing store implementation must enforce a unique constraint on `(sourceType, sourceId, agentId)` — that is, no two rows can have the same combination of source type, source ID, and agent ID. A database-backed store must declare this constraint; an in-memory store must enforce it in its claim logic.
+
+If claim fails (because another runner has already claimed the action), the runner receives an immediate rejection and does not proceed.
+
+### Retry and escalation behavior
+
+If an agent action fails during execution, the runner retries according to the action's retry configuration. After exhausting retries, the action's status is set to `needs_attention`, and it is escalated for manual review. The runner does not attempt further retries once an action has been escalated.
+
 ### Safety filter limitations
 
 `checkSafety()` is an **English keyword/regex filter with known false negatives**. It is not exhaustive, and it inspects the **user's message only** — there is no output-side filtering of the assistant's response. Treat it as a first fail-closed layer, not a guarantee. See RISK-002 in the project's `RISK-REGISTER.md`.
