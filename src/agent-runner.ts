@@ -54,6 +54,9 @@ export class AgentRunner {
         messages: [{ role: 'user', content: userPrompt }],
       });
       draft = definition.parseOutput(response.content);
+      if (definition.enrichSnapshot) {
+        draft = { ...draft, sourceSnapshot: definition.enrichSnapshot(input, draft) };
+      }
     } catch (err) {
       return this.handleDraftFailure(definition, tenantId, claimed, err);
     }
