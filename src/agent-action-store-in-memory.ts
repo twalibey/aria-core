@@ -7,7 +7,7 @@ import type { AgentAction, AgentActionStore } from './agent-types.js';
 // in their own tests instead of hand-rolling a fake.
 export class InMemoryAgentActionStore implements AgentActionStore {
   private actions = new Map<string, AgentAction>();
-  private claimIndex = new Set<string>(); // key: `${sourceType}:${sourceId}:${agentId}`
+  private claimIndex = new Map<string, string>(); // key: `${sourceType}:${sourceId}:${agentId}` -> action ID
 
   async claim(params: {
     tenantId: string;
@@ -16,8 +16,16 @@ export class InMemoryAgentActionStore implements AgentActionStore {
     sourceId: string;
   }): Promise<AgentAction | null> {
     const key = `${params.sourceType}:${params.sourceId}:${params.agentId}`;
-    if (this.claimIndex.has(key)) return null;
-    this.claimIndex.add(key);
+    const existingActionId = this.claimIndex.get(key);
+    if (existingActionId) {
+      const existingAction = this.actions.get(existingActionId);
+      if (existingAction && existingAction.attemptCount > 0) {
+        // Allow re-claiming for retry scenarios (when attemptCount > 0)
+        return existingAction;
+      }
+      // Concurrent claim attempt (attemptCount == 0), not allowed
+      return null;
+    }
 
     const now = new Date();
     const action: AgentAction = {
@@ -35,6 +43,7 @@ export class InMemoryAgentActionStore implements AgentActionStore {
       updatedAt: now,
     };
     this.actions.set(action.id, action);
+    this.claimIndex.set(key, action.id);
     return action;
   }
 
