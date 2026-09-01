@@ -87,3 +87,20 @@
 **Blocking:** Not blocking this plan's initial build. Blocking before real donor data flows through this feature at production scale.
 
 ---
+
+## RISK-006: live-donor-response-agent-smoke-test.ts duplicates donor-response.ts logic with no drift detection
+
+**Status:** Open
+**Filed:** 2026-08-31
+**Source:** Task 15 review of the CorpFlow autonomous-agents plan
+
+**Description:** The smoke-test script at `packages/adapter-corpflow/scripts/live-donor-response-agent-smoke-test.ts` hand-copies `buildPrompt`, `ordinalSuffix`, and `parseOutput` logic from the real `src/lib/agents/donor-response.ts` in CorpFlow's separate repository. This duplication is unavoidable across the repo boundary (the script cannot import from a different repo), but it creates a drift risk: if `donor-response.ts`'s prompt or parsing logic changes, this script continues compiling and "passing" while silently testing stale behavior. The script is excluded from typecheck (same as its predecessor) and never runs in CI (requires a live API key), leaving only an in-script code comment as a drift guard — nothing forces anyone to read it before relying on the script's results.
+
+**Likelihood:** Medium (any future edit to `donor-response.ts`'s prompt or parser logic risks this drifting silently)
+**Impact:** Low-Medium (a stale smoke test gives false confidence; the real production code path is unaffected)
+
+**Action:** Before next relying on this script's results, diff it against the real `donor-response.ts` to confirm the copied logic still matches. Consider whether a future refactor could extract the shared prompt/parse logic into something both repos can import (not in scope for this plan).
+
+**Blocking:** Not blocking this plan. Worth addressing before this script is trusted again after any future change to `donor-response.ts`.
+
+---
