@@ -25,11 +25,11 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "@aria/core": "*",
+    "@aria/core": "github:twalibey/aria-core#core-v0.4.0",
     "drizzle-orm": "^0.45.1"
   },
   "peerDependencies": {
-    "@aria/core": "*",
+    "@aria/core": "github:twalibey/aria-core#core-v0.4.0",
     "drizzle-orm": "^0.45.1"
   }
 }
