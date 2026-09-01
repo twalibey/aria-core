@@ -1,4 +1,5 @@
 import type { AriaHistoryStore, AriaMemoryEntry, AriaMemoryStore, LLMProvider } from './types.js';
+import { stripMarkdownFence } from './fence-parser.js';
 
 export interface MemoryManagerConfig {
   extractionPrompt: string;
@@ -17,20 +18,6 @@ const VALID_MEMORY_TYPES: AriaMemoryEntry['memoryType'][] = [
   'goal',
   'concern',
 ];
-
-// Unanchored on purpose: live models sometimes wrap JSON in a fence and then
-// append (or prepend) trailing prose outside it despite being told not to.
-// Searching for the fence anywhere in the string — rather than requiring it
-// to span the entire trimmed text — lets us still extract the JSON in that
-// case instead of failing to match at all and passing the raw text (prose
-// included) to JSON.parse.
-const MARKDOWN_FENCE_RE = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
-
-function stripMarkdownFence(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(MARKDOWN_FENCE_RE);
-  return match ? match[1].trim() : trimmed;
-}
 
 export class MemoryManager {
   private extractionPrompt: string;
