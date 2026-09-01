@@ -51,17 +51,17 @@ export interface AgentActionsTableRef {
 function rowToAction(row: Record<string, unknown>): AgentAction {
   return {
     id: row.id as string,
-    tenantId: row.tenant_id as string,
-    agentId: row.agent_id as string,
-    sourceType: row.source_type as string,
-    sourceId: row.source_id as string,
+    tenantId: row.tenantId as string,
+    agentId: row.agentId as string,
+    sourceType: row.sourceType as string,
+    sourceId: row.sourceId as string,
     status: row.status as AgentAction['status'],
-    draftContent: (row.draft_content as string | null) ?? null,
-    sourceSnapshot: (row.source_snapshot as Record<string, unknown> | null) ?? null,
-    attemptCount: row.attempt_count as number,
-    confirmedByUserId: (row.confirmed_by_user_id as string | null) ?? null,
-    createdAt: row.created_at as Date,
-    updatedAt: row.updated_at as Date,
+    draftContent: (row.draftContent as string | null) ?? null,
+    sourceSnapshot: (row.sourceSnapshot as Record<string, unknown> | null) ?? null,
+    attemptCount: row.attemptCount as number,
+    confirmedByUserId: (row.confirmedByUserId as string | null) ?? null,
+    createdAt: row.createdAt as Date,
+    updatedAt: row.updatedAt as Date,
   };
 }
 
@@ -74,10 +74,10 @@ export function createDrizzleAgentActionStore(
       const rows = await db
         .insert(table)
         .values({
-          tenant_id: params.tenantId,
-          agent_id: params.agentId,
-          source_type: params.sourceType,
-          source_id: params.sourceId,
+          tenantId: params.tenantId,
+          agentId: params.agentId,
+          sourceType: params.sourceType,
+          sourceId: params.sourceId,
           status: 'processing',
         })
         .onConflictDoNothing({ target: [table.sourceType, table.sourceId, table.agentId] })
@@ -89,10 +89,10 @@ export function createDrizzleAgentActionStore(
     async update(id, patch) {
       const values: Record<string, unknown> = {};
       if ('status' in patch) values.status = patch.status;
-      if ('draftContent' in patch) values.draft_content = patch.draftContent;
-      if ('sourceSnapshot' in patch) values.source_snapshot = patch.sourceSnapshot;
-      if ('attemptCount' in patch) values.attempt_count = patch.attemptCount;
-      if ('confirmedByUserId' in patch) values.confirmed_by_user_id = patch.confirmedByUserId;
+      if ('draftContent' in patch) values.draftContent = patch.draftContent;
+      if ('sourceSnapshot' in patch) values.sourceSnapshot = patch.sourceSnapshot;
+      if ('attemptCount' in patch) values.attemptCount = patch.attemptCount;
+      if ('confirmedByUserId' in patch) values.confirmedByUserId = patch.confirmedByUserId;
 
       const rows = await db
         .update(table)

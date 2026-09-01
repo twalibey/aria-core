@@ -41,17 +41,17 @@ function makeDb(opts: { insertReturns?: Record<string, unknown>[]; updateReturns
 
 const NOW_ROW = {
   id: 'action-1',
-  tenant_id: 'tenant-1',
-  agent_id: 'donor-response',
-  source_type: 'donation_form_submission',
-  source_id: 'sub-1',
+  tenantId: 'tenant-1',
+  agentId: 'donor-response',
+  sourceType: 'donation_form_submission',
+  sourceId: 'sub-1',
   status: 'processing',
-  draft_content: null,
-  source_snapshot: null,
-  attempt_count: 0,
-  confirmed_by_user_id: null,
-  created_at: new Date('2026-08-31T00:00:00Z'),
-  updated_at: new Date('2026-08-31T00:00:00Z'),
+  draftContent: null,
+  sourceSnapshot: null,
+  attemptCount: 0,
+  confirmedByUserId: null,
+  createdAt: new Date('2026-08-31T00:00:00Z'),
+  updatedAt: new Date('2026-08-31T00:00:00Z'),
 };
 
 describe('createDrizzleAgentActionStore', () => {
@@ -72,7 +72,7 @@ describe('createDrizzleAgentActionStore', () => {
       expect(action!.id).toBe('action-1');
       expect(action!.status).toBe('processing');
       expect(insertValues).toHaveBeenCalledWith(
-        expect.objectContaining({ tenant_id: 'tenant-1', agent_id: 'donor-response', status: 'processing' })
+        expect.objectContaining({ tenantId: 'tenant-1', agentId: 'donor-response', status: 'processing' })
       );
       expect(onConflictDoNothing).toHaveBeenCalledWith({ target: [table.sourceType, table.sourceId, table.agentId] });
     });
@@ -95,7 +95,7 @@ describe('createDrizzleAgentActionStore', () => {
 
   describe('update', () => {
     it('sets the given fields, uses the real eq() operator on id, and returns the mapped row', async () => {
-      const updatedRow = { ...NOW_ROW, status: 'pending_confirm', draft_content: 'hello' };
+      const updatedRow = { ...NOW_ROW, status: 'pending_confirm', draftContent: 'hello' };
       const { db, updateSet, updateWhere } = makeDb({ updateReturns: [updatedRow] });
       const table = makeTableRef();
       const store = createDrizzleAgentActionStore(db as any, table);
@@ -105,7 +105,7 @@ describe('createDrizzleAgentActionStore', () => {
       expect(result.status).toBe('pending_confirm');
       expect(result.draftContent).toBe('hello');
       expect(updateSet).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'pending_confirm', draft_content: 'hello' })
+        expect.objectContaining({ status: 'pending_confirm', draftContent: 'hello' })
       );
       expect(updateWhere).toHaveBeenCalledWith(eq(table.id, 'action-1'));
     });
