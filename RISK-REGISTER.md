@@ -104,3 +104,37 @@
 **Blocking:** Not blocking this plan. Worth addressing before this script is trusted again after any future change to `donor-response.ts`.
 
 ---
+
+## RISK-007: `AgentRunner.confirmAndExecute()`/`reject()` have no server-side idempotency guard against a double call on an already-terminal action
+
+**Status:** Open
+**Filed:** 2026-08-31
+**Source:** Final whole-branch review of the CorpFlow autonomous-agents plan, fix wave
+
+**Description:** `@aria/core`'s `AgentRunner.confirmAndExecute()` and `reject()` fetch the action, verify its `tenantId` matches the caller, and then unconditionally act — neither method checks the action's current `status` before proceeding. Calling either twice in quick succession (e.g. a double-click, a retried request after a slow response, or two racing requests) on an already-terminal action (`sent`, `auto_sent`, `edited_and_sent`, `rejected`) has no guard at the framework level. This wave's Fix I-3 adds a CorpFlow-route-level precondition (fetch the action, check `status`/`agentId` before calling `confirmAndExecute`/`reject`, return 409 if the transition isn't valid) that substantially mitigates this for the two CorpFlow routes it covers, but that fix lives in CorpFlow's route layer, not in `@aria/core` itself — the underlying framework method still has no such guard for any future consumer (a different adapter, a different route, a background job) that calls `confirmAndExecute`/`reject` directly without adding the same precondition itself.
+
+**Likelihood:** Low-Medium (requires a double-call race — a slow first request plus a retry, or two staff members acting on the same row near-simultaneously — but nothing prevents it at the framework level)
+**Impact:** Medium (a double `confirmAndExecute` could attempt to send a donor email twice; a double `reject` on an already-`sent` action would silently overwrite the record of a real email that went out — the exact corruption scenario Fix I-3 exists to prevent, just reachable again by any future consumer that doesn't replicate Fix I-3's route-level check)
+
+**Action:** Consider adding a status-transition guard directly inside `AgentRunner.confirmAndExecute()`/`reject()` in a future `@aria/core` minor version, so this protection is structural rather than something every consumer must remember to re-implement at its own route layer.
+
+**Blocking:** Not blocking this plan (Fix I-3 covers the two routes CorpFlow ships today). Should be revisited before any future adapter or route calls `confirmAndExecute`/`reject` without its own equivalent precondition check.
+
+---
+
+## RISK-008: `AgentActionStore.claim()`'s conflict/claim key omits `tenantId`
+
+**Status:** Open, low-priority hardening item
+**Filed:** 2026-08-31
+**Source:** Final whole-branch review of the CorpFlow autonomous-agents plan, fix wave
+
+**Description:** Both `InMemoryAgentActionStore`'s claim-index key and `createDrizzleAgentActionStore`'s `onConflictDoNothing` target are `(sourceType, sourceId, agentId)` only — `tenantId` is not part of either uniqueness key. In practice this is not exploitable today: `sourceId` values are UUIDs, so a genuine cross-tenant collision on `(sourceType, sourceId, agentId)` has effectively nil real-world probability, and the production `createDrizzleAgentActionStore` path only turns a collision into a denial (the conflicting insert is silently dropped, `claim()` returns null) rather than a bypass of any tenant boundary. The real gap is in the in-memory reference store: `InMemoryAgentActionStore` is intended as a template for future adapter authors, and its claim logic bypasses on a rare `attemptCount > 0` collision rather than uniformly denying — a future adapter built by copying this reference implementation, for a domain where `sourceId` is not guaranteed globally unique across tenants (e.g. a sequential per-tenant ID rather than a UUID), could inherit a real cross-tenant claim collision.
+
+**Likelihood:** Low (requires both: a future adapter using non-globally-unique `sourceId` values, and copying `InMemoryAgentActionStore`'s bypass-on-retry behavior verbatim into a production path)
+**Impact:** Low-Medium (a claim collision under those conditions could let one tenant's retry bypass another tenant's already-claimed action row in the affected adapter — not a data-read leak, but an incorrect claim state)
+
+**Action:** Add `tenantId` to both the in-memory claim-index key and the Drizzle store's `onConflictDoNothing` target in a future `@aria/core` minor version, closing the gap structurally rather than relying on UUID `sourceId` values as an implicit mitigation every future adapter must independently understand.
+
+**Blocking:** Not blocking this plan. Worth closing before a future adapter with non-UUID `sourceId` values is built against either store implementation.
+
+---
