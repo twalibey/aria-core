@@ -279,3 +279,112 @@ describe('AgentRunner.run', () => {
     expect(onError).toHaveBeenCalled();
   });
 });
+
+describe('AgentRunner.confirmAndExecute', () => {
+  it('executes the tool with the original draft content and marks the action sent', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    let capturedArgs: unknown;
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async (_userId, args) => {
+        capturedArgs = args;
+        return 'ok';
+      },
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+    const confirmed = await runner.confirmAndExecute(definition, pending.action!.id, 'tenant-1', 'staff-user-1');
+
+    expect(confirmed.status).toBe('sent');
+    expect(confirmed.confirmedByUserId).toBe('staff-user-1');
+    expect((capturedArgs as { content: string }).content).toBe('Thanks Ada!');
+  });
+
+  it('uses editedContent in place of the original draft when provided, and marks edited_and_sent', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    let capturedArgs: unknown;
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async (_userId, args) => {
+        capturedArgs = args;
+        return 'ok';
+      },
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+    const confirmed = await runner.confirmAndExecute(definition, pending.action!.id, 'tenant-1', 'staff-user-1', {
+      editedContent: 'Thanks so much, Ada, edited by staff!',
+    });
+
+    expect(confirmed.status).toBe('edited_and_sent');
+    expect((capturedArgs as { content: string }).content).toBe('Thanks so much, Ada, edited by staff!');
+  });
+
+  it('marks send_failed (not thrown) when the tool execution fails during confirm', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async () => {
+        throw new Error('email provider down');
+      },
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+    const result = await runner.confirmAndExecute(definition, pending.action!.id, 'tenant-1', 'staff-user-1');
+
+    expect(result.status).toBe('send_failed');
+  });
+
+  it('throws if the actionId does not exist', async () => {
+    const llm = makeLLM('{}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    await expect(
+      runner.confirmAndExecute(definition, 'does-not-exist', 'tenant-1', 'staff-user-1')
+    ).rejects.toThrow();
+  });
+});
+
+describe('AgentRunner.reject', () => {
+  it('marks the action rejected without executing the tool', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const executeSpy = vi.spyOn(registry, 'execute');
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition();
+
+    const pending = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+    const rejected = await runner.reject(pending.action!.id, 'tenant-1');
+
+    expect(rejected.status).toBe('rejected');
+    expect(executeSpy).not.toHaveBeenCalled();
+  });
+});

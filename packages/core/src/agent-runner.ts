@@ -71,6 +71,45 @@ export class AgentRunner {
     return this.runAutoExecute(definition, tenantId, claimed, draft);
   }
 
+  async confirmAndExecute(
+    definition: AgentDefinition<unknown>,
+    actionId: string,
+    tenantId: string,
+    userId: string,
+    opts?: { editedContent?: string }
+  ): Promise<AgentAction> {
+    const existing = await this.actionStore.get(actionId);
+    if (!existing) throw new Error(`AgentAction not found: ${actionId}`);
+
+    const content = opts?.editedContent ?? existing.draftContent ?? '';
+    const draft = { draftContent: content, sourceSnapshot: existing.sourceSnapshot ?? {} };
+    const toolArgs = definition.buildToolArgs(draft);
+
+    const result = await this.toolRegistry.execute(userId, definition.action.name, toolArgs, { tenantId });
+
+    if (!result.success) {
+      this.onError?.({
+        agentId: definition.id,
+        tenantId,
+        error: new Error(result.error ?? `Tool execution failed for ${definition.action.name}`),
+      });
+      return this.actionStore.update(actionId, { status: 'send_failed' });
+    }
+
+    const finalStatus: AgentActionStatus = opts?.editedContent ? 'edited_and_sent' : 'sent';
+    return this.actionStore.update(actionId, {
+      status: finalStatus,
+      draftContent: content,
+      confirmedByUserId: userId,
+    });
+  }
+
+  async reject(actionId: string, tenantId: string): Promise<AgentAction> {
+    const existing = await this.actionStore.get(actionId);
+    if (!existing) throw new Error(`AgentAction not found: ${actionId}`);
+    return this.actionStore.update(actionId, { status: 'rejected' });
+  }
+
   private async handleDraftFailure<Input>(
     definition: AgentDefinition<Input>,
     tenantId: string,
