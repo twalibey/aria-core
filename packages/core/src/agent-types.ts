@@ -54,6 +54,15 @@ export interface AgentDefinition<Input> {
   sourceType: string;
   buildPrompt(input: Input): { systemPrompt: string; userPrompt: string };
   parseOutput(raw: string): AgentDraftOutput;
+  /**
+   * Optional hook run immediately after parseOutput, before sourceSnapshot
+   * is used or persisted anywhere. Lets an agent overwrite/inject fields in
+   * the model-produced sourceSnapshot with real, non-LLM-derived data (the
+   * model should never be trusted as the source of truth for operational
+   * fields like a recipient address). Receives the original run() input
+   * and the freshly-parsed draft; returns the sourceSnapshot to actually use.
+   */
+  enrichSnapshot?(input: Input, draft: AgentDraftOutput): Record<string, unknown>;
   action: ToolDefinition;
   buildToolArgs(draft: AgentDraftOutput): Record<string, unknown>;
   checkAutonomy(tenantId: string): Promise<AutonomyLevel>;

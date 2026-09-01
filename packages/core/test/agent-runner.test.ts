@@ -109,6 +109,82 @@ describe('AgentRunner.run', () => {
     expect(result.status).toBe('draft_failed');
   });
 
+  it('sets draft_failed when enrichSnapshot throws, exactly like a parseOutput throw', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition({
+      enrichSnapshot: () => {
+        throw new Error('enrichSnapshot boom');
+      },
+    });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('draft_failed');
+    expect(result.action?.attemptCount).toBe(1);
+  });
+
+  it('escalates enrichSnapshot failures to needs_attention once attemptCount reaches maxAttempts', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store, undefined, 3);
+    const definition = makeDefinition({
+      enrichSnapshot: () => {
+        throw new Error('enrichSnapshot boom');
+      },
+    });
+
+    const claimed = await store.claim({
+      tenantId: 'tenant-1',
+      agentId: 'test-agent',
+      sourceType: 'test_source',
+      sourceId: 'sub-1',
+    });
+    await store.update(claimed!.id, { attemptCount: 2 });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('needs_attention');
+    expect(result.action?.attemptCount).toBe(3);
+  });
+
+  it('uses enrichSnapshot\'s return value as the persisted sourceSnapshot when autonomy is confirm', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition({
+      enrichSnapshot: (input, draft) => ({ ...draft.sourceSnapshot, donorName: input.donorName }),
+    });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('pending_confirm');
+    expect(result.action?.sourceSnapshot).toEqual({ amount: 10, donorName: 'Ada' });
+  });
+
+  it('leaves sourceSnapshot exactly as parsed when enrichSnapshot is absent (backward compatibility)', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    const runner = new AgentRunner(llm, registry, store);
+    // No enrichSnapshot on this definition. If it were ever invoked despite
+    // being absent, there is no hook to invoke — this test instead proves
+    // the model's raw sourceSnapshot passes through untouched, rather than
+    // being replaced by some hypothetical would-be-enriched value like
+    // { amount: 10, donorName: 'Ada' }.
+    const definition = makeDefinition();
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('pending_confirm');
+    expect(result.action?.sourceSnapshot).toEqual({ amount: 10 });
+    expect(result.action?.sourceSnapshot).not.toEqual({ amount: 10, donorName: 'Ada' });
+  });
+
   it('escalates to needs_attention once attemptCount reaches maxAttempts', async () => {
     const llm = makeLLM(new Error('LLM timeout'));
     const store = new InMemoryAgentActionStore();
@@ -253,6 +329,30 @@ describe('AgentRunner.run', () => {
 
     expect(result.status).toBe('auto_sent');
     expect(result.action?.draftContent).toBe('Thanks Ada!');
+  });
+
+  it('uses enrichSnapshot\'s return value as the persisted sourceSnapshot when autonomy is auto', async () => {
+    const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
+    const store = new InMemoryAgentActionStore();
+    const registry = new ToolRegistry();
+    registry.register({
+      definition: {
+        name: 'send-test-action',
+        description: 'Sends the test action',
+        parameters: { type: 'object', properties: { content: { type: 'string' } } },
+      },
+      handler: async (_userId, args) => `sent: ${(args as { content: string }).content}`,
+    });
+    const runner = new AgentRunner(llm, registry, store);
+    const definition = makeDefinition({
+      checkAutonomy: async () => 'auto',
+      enrichSnapshot: (input, draft) => ({ ...draft.sourceSnapshot, donorName: input.donorName }),
+    });
+
+    const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
+
+    expect(result.status).toBe('auto_sent');
+    expect(result.action?.sourceSnapshot).toEqual({ amount: 10, donorName: 'Ada' });
   });
 
   it('writes send_failed when autonomy is auto and the tool execution fails', async () => {
