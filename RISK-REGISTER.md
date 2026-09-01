@@ -68,3 +68,22 @@
 8. **The Slack alert fired on a tenant-scoping violation has no severity tiering.** An ordinary LLM mistake (e.g., requesting a non-whitelisted column by typo) pages the team with the same urgency as a genuine attempted cross-tenant access attempt. This is a real alert-fatigue risk — enough low-severity noise could cause a real violation to get missed or dismissed. Deferred, not fixed.
 
 **Recommended, not built:** fixing CorpFlow's DB connection to use a non-superuser, per-request-scoped role with `FORCE ROW LEVEL SECURITY`, for true defense-in-depth.
+
+---
+
+## RISK-005: Donor Response Agent's follow-up email has no separate consent/opt-out mechanism
+
+**Status:** Open
+**Filed:** 2026-08-31
+**Source:** Gap analysis during the CorpFlow autonomous-agents design (2026-08-31)
+
+**Description:** The Donor Response Agent's personalized follow-up email is treated as transactional (tied directly to a specific gift the donor just made), reusing the same consent basis as a payment receipt, rather than being given its own opt-out/preference mechanism as semi-marketing content. Not verified against real legal/compliance review — a reasonable-sounding assumption, not a confirmed one.
+
+**Likelihood:** Medium (depends on jurisdiction-specific email-consent rules not yet researched)
+**Impact:** Medium (regulatory/compliance exposure if the transactional classification turns out to be wrong; donor trust exposure if this reads as unwanted marketing)
+
+**Action:** Have counsel review whether this follow-up email requires its own consent basis distinct from the donation receipt, before this handles real donor communications at meaningful scale.
+
+**Blocking:** Not blocking this plan's initial build. Blocking before real donor data flows through this feature at production scale.
+
+---
