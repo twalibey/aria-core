@@ -120,6 +120,8 @@
 
 **Blocking:** Not blocking this plan (Fix I-3 covers the two routes CorpFlow ships today). Should be revisited before any future adapter or route calls `confirmAndExecute`/`reject` without its own equivalent precondition check.
 
+**Amendment, 2026-09-06 (CorpFlow automation-builder / Pillar 4 design, alignment-analysis):** Pillar 4's `notify_case_owner` action tool adds a second exposure surface — a check-before-send idempotency key `(case_id, assignee_id, definition_id)` at the tool level, checked before an action is allowed to send. This reduces but does not close this risk: two concurrent `confirmAndExecute` calls on the same draft can both pass the tool-level check before either sends (check-then-act race), since the underlying framework method still has no atomic guard. Deliberately deferred rather than fixed as part of Pillar 4, per explicit user decision, to keep that pillar's scope contained — but Pillar 4 is now a second real consumer that needs this closed properly, raising the priority of the underlying `Action` above.
+
 ---
 
 ## RISK-008: `AgentActionStore.claim()`'s conflict/claim key omits `tenantId`
@@ -136,5 +138,40 @@
 **Action:** Add `tenantId` to both the in-memory claim-index key and the Drizzle store's `onConflictDoNothing` target in a future `@aria/core` minor version, closing the gap structurally rather than relying on UUID `sourceId` values as an implicit mitigation every future adapter must independently understand.
 
 **Blocking:** Not blocking this plan. Worth closing before a future adapter with non-UUID `sourceId` values is built against either store implementation.
+
+---
+
+## RISK-009: `ToolRegistry`'s `SecurityAuditLog` wiring is optional, not structurally enforced
+
+**Status:** Open
+**Filed:** 2026-09-06
+**Source:** Alignment-analysis pass during the CorpFlow automation-builder (Pillar 4) design, verified against real code via investigation subagent
+
+**Description:** `@aria/core`'s `ToolRegistry` constructor (`packages/core/src/tools.ts:23-26`) takes `securityAuditLog` as an optional parameter with no default enforcement. The autonomous-agents pillar's final review already found all 3 real `ToolRegistry` instances (`approve/route.ts`, `reject/route.ts`, `cron/[job]/route.ts`) had been built without it wired in, and fixed each instance individually — but the constructor itself was never changed to make omission impossible. Those two routes are hardcoded to `donorResponseAgentDefinition` and cannot be reused as-is for Pillar 4's automation actions; a new or generalized approve/reject path is required, and nothing in `ToolRegistry`'s type signature would catch that new path silently omitting the audit log the same way the original 3 nearly did.
+
+**Sharper than originally filed (confirmed 2026-09-06, planning-stage investigation for Pillar 4):** `ToolRegistry.execute()`'s entire tenant-context enforcement block — the missing-tenant-context check and the LLM-supplied-tenant-id stripping — is gated inside `if (this.securityAuditLog)` (`tools.ts:54`). Omitting `securityAuditLog` doesn't just disable audit logging; it disables tenant-scoping enforcement itself for every tool call routed through that instance. This is a real vulnerability class, not a logging gap — reclassified accordingly below.
+
+**Likelihood:** Medium (a second, independently-built route is now planned; the same class of omission has already happened once)
+**Impact:** Critical (an unaudited `ToolRegistry` instance doesn't just lose its audit trail — it silently drops tenant-scoping enforcement for every tool call it routes, the exact vulnerability class this project's CorpFlow pivot exists to close)
+
+**Action:** Make `securityAuditLog` a required constructor parameter (no default) in a future `@aria/core` minor version, so this is structural rather than a convention every new route must remember — planned as part of Pillar 4's implementation, since it's the pillar creating the next `ToolRegistry`-adjacent route.
+
+**Blocking:** Blocking for Pillar 4's new approve/reject-equivalent route — must be fixed before or alongside that route's construction, not deferred past it.
+
+---
+
+## Standing Process Rules
+
+Cross-pillar process requirements, distinct from the numbered security/compliance risks above — apply to every future pillar, not just the one that surfaced them.
+
+### PROC-001: Every new UI surface must be linked into real product navigation before a pillar is considered done
+
+**Added:** 2026-09-06, promoted from a per-pillar reminder after recurring across two pillars
+
+**Description:** The autonomous-agents pillar (Pillar 3) shipped a queue page that was never linked into CorpFlow's actual navigation — a real defect caught only at final review. Pillar 4's original design explicitly promised not to repeat this, but its own alignment-analysis found that promise covered only one of the three new UI surfaces the pillar actually introduces (creation/preview flow, automation management list, per-automation autonomy toggle). Restating the discipline pillar-by-pillar has now failed once and needed reinforcement once — it does not reliably self-correct as a per-pillar reminder.
+
+**Rule:** Before any pillar (or any future feature with a UI component) is marked done, every new UI surface it introduces must be explicitly enumerated and confirmed linked into the product's real navigation — not just built and reachable by direct URL. This check belongs in that work's own Definition of Done, and in whatever review closes it out (task review or final whole-branch review), not left to be remembered freshly each time.
+
+**Blocking:** Applies going forward to every pillar/feature with a UI component, starting with Pillar 4.
 
 ---
