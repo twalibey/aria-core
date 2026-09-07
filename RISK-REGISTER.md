@@ -162,6 +162,26 @@
 
 ---
 
+## RISK-010: `live-automation-builder-smoke-test.ts` — investigated for RISK-006's duplication class; does not actually have it
+
+**Status:** Closed (no corrective action needed — filed to record the investigation, not an open defect)
+**Filed:** 2026-09-07
+**Source:** Task 15 of the CorpFlow automation-builder plan
+
+**Description:** This plan's own draft text for this entry assumed the new script at CorpFlow's `scripts/live-automation-builder-smoke-test.ts` would repeat RISK-006's problem — hand-copying `propose-descriptor.ts`'s prompt logic because it's "excluded from typecheck/CI, same pattern as `live-donor-response-agent-smoke-test.ts`." Both premises were checked directly against the actual code before writing this script, and both are false for this case:
+
+1. **No duplication exists.** The script imports the real `proposeAutomationDescriptor` from `../src/lib/automations/propose-descriptor` and the real `AutomationDescriptorValidator`/`AutomationWhitelistEntry`/`AUTOMATION_SAFE_FAILURE_MESSAGE` from `@aria/core` directly — no hand-copied prompt or parse logic anywhere in the file. This is possible (and RISK-006's donor-response script couldn't do the same) because `propose-descriptor.ts` and `AutomationDescriptorValidator` have no live-DB or live-email dependency at module scope to avoid. RISK-006's script exists specifically because the real `donorResponseAgentDefinition` pulls in CorpFlow's live Drizzle `@/lib/db` and live Resend `@/lib/email/resend` clients at module scope, which a standalone script run from a different repo (the ARIA monorepo) cannot and should not drag in — forcing that script to mirror the logic by hand instead of importing it. `propose-descriptor.ts` has none of that: it only imports `stripMarkdownFence` from `@aria/core` and `aiPrompt` from CorpFlow's own `@/lib/ai/client` (a plain fetch wrapper, no live connection held at module scope), and this script lives inside CorpFlow's own repo (`scripts/`, sibling to `src/`) rather than across a repo boundary — so a real, direct import is not just possible but strictly better than duplicating.
+2. **Nothing excludes this script from typecheck/CI.** CorpFlow's own `tsconfig.json` `include` is a broad `**/*.ts` covering the whole repo, with no `scripts/`-specific exclusion (unlike `packages/adapter-corpflow/tsconfig.json` in the ARIA monorepo, which structurally excludes `scripts/` via `include: ["src"]`). Adding such an exclusion here would be scope creep affecting the whole repo's typecheck behavior, not something this task needed. The script was written to type-check cleanly on its own and verified via `npx tsc --noEmit` (exit 0), including a deliberate check that a broken import in this exact file is actually caught (confirmed: introducing a bad relative path produced `TS2307: Cannot find module`, then reverted).
+
+**Likelihood:** N/A — no drift-detection gap exists to have a likelihood of manifesting.
+**Impact:** N/A — no duplicated logic exists that could drift.
+
+**Action:** None required. Filed only so a future reviewer sees this was investigated rather than assumed, and doesn't need to re-derive the same conclusion. If `propose-descriptor.ts` is ever refactored to gain a live-DB/live-email dependency at module scope, re-check whether this script still can import it directly before assuming it still can.
+
+**Blocking:** Not blocking — this is a closed investigation record, not an open risk.
+
+---
+
 ## RISK-011: `InMemoryAgentActionStore.claim()` conflates claim-vs-retry semantics, making `AgentRunner.run()`'s reclaim fallback unreachable against it
 
 **Status:** Open
