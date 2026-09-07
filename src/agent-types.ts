@@ -62,6 +62,14 @@ export interface AgentDefinition<Input> {
   buildPrompt(input: Input): { systemPrompt: string; userPrompt: string };
   parseOutput(raw: string): AgentDraftOutput;
   /**
+   * Optional deterministic drafting path. When present, run() calls this
+   * instead of buildPrompt/llmProvider.call/parseOutput — the LLM is never
+   * invoked. Everything else about the agent (enrichSnapshot, buildToolArgs,
+   * checkAutonomy, action) behaves identically regardless of which drafting
+   * path produced the AgentDraftOutput.
+   */
+  buildDraft?(input: Input): AgentDraftOutput | Promise<AgentDraftOutput>;
+  /**
    * Optional hook run immediately after parseOutput, before sourceSnapshot
    * is used or persisted anywhere. Lets an agent overwrite/inject fields in
    * the model-produced sourceSnapshot with real, non-LLM-derived data (the

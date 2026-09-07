@@ -29,12 +29,21 @@ export class AgentRunner {
       return { status: 'skipped_off' };
     }
 
-    const claimed = await this.actionStore.claim({
+    let claimed = await this.actionStore.claim({
       tenantId,
       agentId: definition.id,
       sourceType: definition.sourceType,
       sourceId,
     });
+    if (!claimed) {
+      claimed = await this.actionStore.reclaimForRetry({
+        tenantId,
+        agentId: definition.id,
+        sourceType: definition.sourceType,
+        sourceId,
+        maxAttempts: this.maxAttempts,
+      });
+    }
     if (!claimed) {
       return { status: 'skipped_already_claimed' };
     }
@@ -48,12 +57,16 @@ export class AgentRunner {
 
     let draft;
     try {
-      const { systemPrompt, userPrompt } = definition.buildPrompt(input);
-      const response = await this.llmProvider.call({
-        systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      });
-      draft = definition.parseOutput(response.content);
+      if (definition.buildDraft) {
+        draft = await definition.buildDraft(input);
+      } else {
+        const { systemPrompt, userPrompt } = definition.buildPrompt(input);
+        const response = await this.llmProvider.call({
+          systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
+        });
+        draft = definition.parseOutput(response.content);
+      }
       if (definition.enrichSnapshot) {
         draft = { ...draft, sourceSnapshot: definition.enrichSnapshot(input, draft) };
       }
