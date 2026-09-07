@@ -60,6 +60,17 @@ describe('createDrizzleAgentActionStore.reclaimForRetry (real end-to-end)', () =
     expect(sql).toContain('"status" = $1');
     // draft_failed is bound as a parameter, never inlined into the SQL string.
     expect(sql.toLowerCase()).toContain('attempt_count');
+    // Pin the exact comparison operator against the attempt cap. This stub
+    // driver never evaluates the WHERE predicate (it just echoes back
+    // hand-supplied `rows`), so a real behavioral boundary test isn't
+    // possible here — but asserting the compiled SQL text itself catches an
+    // accidental lt->lte swap (or a copy-paste of claim()'s different
+    // semantics), which would silently let a terminal/already-exhausted row
+    // get reclaimed at exactly maxAttempts instead of being correctly
+    // excluded.
+    expect(sql).toMatch(/"attempt_count" < \$\d+/);
+    expect(sql).not.toContain('"attempt_count" <=');
+    expect(sql).not.toContain('"attempt_count" >');
     expect(params).toContain('t1');
     expect(params).toContain('automation:a1');
     expect(params).toContain('case');
