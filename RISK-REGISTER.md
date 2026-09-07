@@ -184,7 +184,7 @@
 ## RISK-012: A bare `npm install` at the repo root fails in a genuinely fresh clone (monorepo workspace build-ordering)
 
 **Status:** Open
-**Filed:** 2026-09-07
+**Filed:** 2026-09-06
 **Source:** Task 7 (CorpFlow automation-builder plan) standalone build verification — diagnosed while bumping `@aria/adapter-corpflow` to 0.8.0 and repinning its `@aria/core` dependency to resolve via the local workspace instead of a stale external git tag.
 
 **Description:** A brand-new clone of this repo, followed by a plain `npm install` with no flags, fails. Symptom:
