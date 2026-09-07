@@ -40,6 +40,13 @@ export interface AgentActionStore {
     sourceType: string;
     sourceId: string;
   }): Promise<AgentAction | null>;
+  reclaimForRetry(params: {
+    tenantId: string;
+    agentId: string;
+    sourceType: string;
+    sourceId: string;
+    maxAttempts: number;
+  }): Promise<AgentAction | null>;
   update(
     id: string,
     patch: Partial<
