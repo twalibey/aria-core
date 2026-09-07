@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { InMemoryAgentActionStore } from '../src/agent-action-store-in-memory';
 
 describe('InMemoryAgentActionStore', () => {
@@ -55,5 +55,61 @@ describe('InMemoryAgentActionStore', () => {
   it('get returns null for an unknown id', async () => {
     const store = new InMemoryAgentActionStore();
     expect(await store.get('does-not-exist')).toBeNull();
+  });
+});
+
+describe('InMemoryAgentActionStore.reclaimForRetry', () => {
+  let store: InMemoryAgentActionStore;
+
+  beforeEach(() => {
+    store = new InMemoryAgentActionStore();
+  });
+
+  it('reclaims a draft_failed row back to processing when under the attempt cap', async () => {
+    const claimed = await store.claim({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c1',
+    });
+    expect(claimed).not.toBeNull();
+    await store.update(claimed!.id, { status: 'draft_failed', attemptCount: 1 });
+
+    const reclaimed = await store.reclaimForRetry({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c1', maxAttempts: 3,
+    });
+
+    expect(reclaimed).not.toBeNull();
+    expect(reclaimed!.id).toBe(claimed!.id);
+    expect(reclaimed!.status).toBe('processing');
+  });
+
+  it('returns null when the row is already at the attempt cap', async () => {
+    const claimed = await store.claim({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c2',
+    });
+    await store.update(claimed!.id, { status: 'draft_failed', attemptCount: 3 });
+
+    const reclaimed = await store.reclaimForRetry({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c2', maxAttempts: 3,
+    });
+
+    expect(reclaimed).toBeNull();
+  });
+
+  it('returns null when no row exists for the triple', async () => {
+    const reclaimed = await store.reclaimForRetry({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'nonexistent', maxAttempts: 3,
+    });
+    expect(reclaimed).toBeNull();
+  });
+
+  it('returns null when the existing row is not draft_failed (e.g. still processing)', async () => {
+    const claimed = await store.claim({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c3',
+    });
+    expect(claimed!.status).toBe('processing');
+
+    const reclaimed = await store.reclaimForRetry({
+      tenantId: 't1', agentId: 'automation:a1', sourceType: 'case', sourceId: 'c3', maxAttempts: 3,
+    });
+    expect(reclaimed).toBeNull();
   });
 });

@@ -50,6 +50,25 @@ export class InMemoryAgentActionStore implements AgentActionStore {
     return action;
   }
 
+  async reclaimForRetry(params: {
+    tenantId: string;
+    agentId: string;
+    sourceType: string;
+    sourceId: string;
+    maxAttempts: number;
+  }): Promise<AgentAction | null> {
+    const key = `${params.sourceType}:${params.sourceId}:${params.agentId}`;
+    const existingActionId = this.claimIndex.get(key);
+    if (!existingActionId) return null;
+    const existing = this.actions.get(existingActionId);
+    if (!existing) return null;
+    if (existing.status !== 'draft_failed') return null;
+    if (existing.attemptCount >= params.maxAttempts) return null;
+    existing.status = 'processing';
+    existing.updatedAt = new Date();
+    return { ...existing };
+  }
+
   async update(
     id: string,
     patch: Partial<
