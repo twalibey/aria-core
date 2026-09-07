@@ -14,6 +14,14 @@ Tool handlers must derive all data scope from the `userId` parameter (and, in te
 
 When tenant-scoped mode is on, `ToolRegistry.execute()` also strips any of the known tenant-identity spellings (`tenantId`, `tenant_id`) an LLM-calling tool tries to pass in `args`, logging an `llm_supplied_tenant_id` violation each time, rather than trusting it — the real tenant always comes from the `TenantContext` parameter, never from the tool call arguments.
 
+### Breaking change in `v0.8.0`: `ToolRegistry`'s `securityAuditLog` constructor argument is now required
+
+`ToolRegistry`'s second constructor argument, `securityAuditLog`, was previously optional; as of `v0.8.0` it is a required parameter. Every consumer must now pass a real `SecurityAuditLog` instance — there is no longer a silent "tenant-scoping off" default reachable by simply omitting the argument. See "Tenant-scoped mode is opt-in via `SecurityAuditLog`, not a separate flag" above for what that argument controls.
+
+### New in `v0.8.0`: `AutomationDescriptorValidator`
+
+`AutomationDescriptorValidator` (plus its `AUTOMATION_SAFE_FAILURE_MESSAGE` constant and `AutomationWhitelistEntry` / `ProposedAutomationDescriptor` / `AutomationValidationResult` types) is now exported from `@aria/core`'s entry point. It validates an LLM-proposed automation descriptor (`{ triggerEvent, actionType }`) against a caller-supplied whitelist of allowed `(triggerEvent, actionType)` pairs, returning either the validated descriptor or a fixed, safe failure message — never the model's own raw explanation of why it failed.
+
 ## Agent Framework
 
 `AgentRunner` orchestrates autonomous agent execution with three configurable autonomy levels, each controlling how far the agent proceeds without human intervention:
