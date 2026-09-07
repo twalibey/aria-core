@@ -181,6 +181,39 @@
 
 ---
 
+## RISK-012: A bare `npm install` at the repo root fails in a genuinely fresh clone (monorepo workspace build-ordering)
+
+**Status:** Open
+**Filed:** 2026-09-07
+**Source:** Task 7 (CorpFlow automation-builder plan) standalone build verification — diagnosed while bumping `@aria/adapter-corpflow` to 0.8.0 and repinning its `@aria/core` dependency to resolve via the local workspace instead of a stale external git tag.
+
+**Description:** A brand-new clone of this repo, followed by a plain `npm install` with no flags, fails. Symptom:
+
+```
+src/agent-action-store.ts(2,52): error TS7016: Could not find a declaration file for module '@aria/core'. '.../packages/core/dist/index.js' implicitly has an 'any' type.
+src/agent-action-store.ts(73,17): error TS7006: Parameter 'params' implicitly has an 'any' type.
+... (several more TS7006/TS7016 in agent-action-store.ts and query-plan-runner.ts)
+npm error Lifecycle script `build` failed with error:
+npm error workspace @aria/adapter-corpflow@0.8.0
+```
+
+Root cause: `npm install` automatically runs each workspace member's own `prepare` script (both `packages/core` and `packages/adapter-corpflow` have `"prepare": "npm run build"`, needed so a real external git-tag install produces a working `dist/`). npm processes workspace members' `prepare` scripts in alphabetical directory order, not true dependency order — `packages/adapter-corpflow` always runs before `packages/core`. Until Task 7's repin (this same task), `adapter-corpflow`'s `@aria/core` dependency was a real external git tag, so its build never actually needed `packages/core`'s local `dist/` to exist — this bug was latent, not yet exercised. Task 7 correctly repinned `adapter-corpflow`'s `@aria/core` dependency to resolve via the local workspace (necessary to fix a different, real defect — see the Task 7 report), which means `adapter-corpflow`'s build now genuinely depends on `packages/core`'s `dist/` existing first. On a fresh clone, it doesn't yet, so `tsc` resolves `@aria/core`'s exports with no type declarations at all (implicit `any`, `skipLibCheck` doesn't save it) and later `strict`-mode checks on the now-`any`-typed parameters fail.
+
+Confirmed reproducible in a disposable throwaway clone, deleted after diagnosis. Also confirmed the *explicit* `npm run build` script does not hit this (a `prebuild` hook added in the same Task 7 commit forces `packages/core` to build first for that script, mirroring the pre-existing `pretest`/`pretypecheck` pattern) — this defect is specific to the implicit `prepare`-during-`npm install` path, which the `prebuild` hook cannot reach.
+
+**Verified workaround:** `npm install --ignore-scripts && npm run build && npm test` — skips the redundant, mis-ordered per-workspace `prepare`-time build (harmless to skip locally; the subsequent explicit `npm run build`, correctly ordered via `prebuild`, builds everything anyway) and confirmed clean (37/37 test files, 271/271 tests) in a fresh clone.
+
+**Why not fixed here:** The only way to make a bare `npm install` succeed would be to change one or both packages' own `prepare`/`build` scripts to tolerate running out of order (e.g., having `adapter-corpflow`'s `prepare` explicitly build `../core` first) — but `packages/adapter-corpflow` is also consumed standalone by real external projects (e.g. CorpFlow) via a git-tag install, where no `../core` sibling directory exists at all; a fix shaped around this monorepo's own directory layout would either no-op harmlessly or (if done carelessly) break that real external install path. That needs its own dedicated design pass, not a fix folded into a version-bump task.
+
+**Likelihood:** High (this is the default, unmodified command a new contributor or CI job would run; it fails 100% of the time from a genuinely fresh clone, not intermittently)
+**Impact:** Low-Medium (fully diagnosed, has a simple verified one-flag workaround, and does not affect real external consumption of either published package — only this monorepo's own from-scratch local setup)
+
+**Action:** Design a proper fix for workspace-aware build ordering during `npm install` (e.g., root-level `preinstall`/`postinstall` orchestration, or an npm/tooling upgrade with real topological workspace script ordering) that does not touch `packages/adapter-corpflow`'s or `packages/core`'s own `prepare`/`build` scripts in a way that could affect real external git-tag consumers. Until then, document `npm install --ignore-scripts && npm run build` as the supported fresh-clone setup path (e.g. in a root README/CONTRIBUTING note).
+
+**Blocking:** Not blocking this plan (CorpFlow automation-builder). Worth fixing before onboarding a new contributor who would otherwise hit this on their very first `npm install`.
+
+---
+
 ## Standing Process Rules
 
 Cross-pillar process requirements, distinct from the numbered security/compliance risks above — apply to every future pillar, not just the one that surfaced them.
