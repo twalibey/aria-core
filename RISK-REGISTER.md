@@ -222,22 +222,26 @@ Confirmed reproducible in a disposable throwaway clone, deleted after diagnosis.
 
 ---
 
-## RISK-013: A git-tag-installed workspace package may resolve to the whole monorepo root, not the matched package subdirectory
+## RISK-013: `core-v0.8.0`/`adapter-corpflow-v0.8.0` (and the `v0.8.1` hotfix) were never subtree-split — both are non-functional for real external consumption
 
-**Status:** Open
+**Status:** Resolved (2026-09-07), superseded by properly subtree-split `v0.8.2` tags
 **Filed:** 2026-09-07
-**Source:** Verifying RISK-012's fix (a real `npm install` of `@aria/adapter-corpflow`/`@aria/core` against the pushed `github:twalibey/aria-core#adapter-corpflow-v0.8.0`/`#core-v0.8.0` tags into a scratch external consumer project).
+**Source:** Verifying RISK-012's fix end-to-end: a real `npm install` of `@aria/adapter-corpflow`/`@aria/core` against the pushed `github:twalibey/aria-core#adapter-corpflow-v0.8.1`/`#core-v0.8.1` tags into CorpFlow's own checkout, followed by `node -e "require.resolve('@aria/adapter-corpflow')"`.
 
-**Description:** Even after a git dependency's `prepare` script succeeds (RISK-012's fix), the content npm places under the consumer's `node_modules/@aria/adapter-corpflow` and `node_modules/@aria/core` for a workspace-declaring monorepo git-tag install appears to be the entire cloned repo root, not the matched workspace member's own subdirectory. If that holds under real `require`/`import` resolution, a real consumer's `import { ... } from '@aria/adapter-corpflow'` would not resolve the way `packages/adapter-corpflow/package.json`'s own `main`/`module`/`exports` fields intend, because npm never rewrote `node_modules/@aria/adapter-corpflow` to point at `packages/adapter-corpflow` specifically.
+**Description:** `npm install` completed with zero errors, but `require.resolve('@aria/adapter-corpflow')` failed outright (`Cannot find module`). Inspecting `node_modules/@aria/adapter-corpflow` showed it held the **entire monorepo root** (`ARIA-Reference.md`, `RISK-REGISTER.md`, `docs/`, `packages/`, root `tsconfig*.json`) — its `package.json`'s `"name"` field was `"aria"` (the monorepo root's own name), with no `main`/`module`/`exports` field and no `dist/` at that level (the real built output was two directories deeper, at `packages/adapter-corpflow/dist`, which node's resolution never looks for).
 
-Not yet confirmed against a real `require()`/`import` in running code — the observation so far is limited to inspecting what npm placed on disk after install. No CorpFlow code path imports these packages yet (Pillar 4's CorpFlow-side tasks, 8-15, have not started), so this has never been exercised end-to-end.
+**Root cause confirmed against this repo's own documented process** (`packages/core/README.md`, "Versioning & Distribution"): every publishable package tag is required to be cut via `git subtree split --prefix=packages/<name>`, re-pointing a dedicated `release-<name>` branch, so that package's own directory becomes the *root* of the tagged tree — confirmed by inspecting `adapter-corpflow-v0.7.0`'s tree (correctly just `package.json`/`src/`/`test/`/etc., no monorepo wrapper). **Both `core-v0.8.0`/`adapter-corpflow-v0.8.0` (cut in the prior session) and the `v0.8.1` hotfix (cut this session) skipped this step entirely** — both are plain tags directly on the monorepo commit. `release-core`/`release-adapter-corpflow` were left untouched at their `v0.7.0` state the whole time. This was invisible to every check run so far (standalone monorepo build, `npm test`, even the RISK-012 fix's own "real npm install completes" check) because none of them call `require.resolve` or actually import the installed package — this project's [[feedback_verify_git_tags_with_standalone_build]] memory already lists 4 classes of tag-cutting defect invisible to a standalone build; this is a 5th, and the most basic one (the subtree-split step being skipped outright, despite being documented), not a new mechanism.
 
-**Likelihood:** Unknown — needs a real import-and-run test against the installed package, not just a directory listing, before this can be sized.
-**Impact:** Potentially Critical if confirmed (would break every real consumer import of either package installed via git tag, including CorpFlow's upcoming Part C work) — or a non-issue if npm's own module resolution correctly walks into the workspace subdirectory despite the on-disk layout looking like the whole repo.
+**Fix:** Re-did the release correctly as `v0.8.2` — real `git subtree split --prefix=packages/core` / `--prefix=packages/adapter-corpflow`, `git branch -f release-core`/`release-adapter-corpflow` re-pointed at the new split commits, tagged from those branches (not the monorepo commit). `v0.8.0` and `v0.8.1` are left in place, undeleted (already pushed, per this project's own convention against rewriting a published tag), but are now documented here as **non-functional for real external consumption** — do not point any consumer at either.
 
-**Action:** Confirm or rule out with a real `import`/`require` smoke test (not just directory inspection) against a scratch consumer project before Part C (Tasks 8-15) starts relying on these imports for real — the CorpFlow repin/reinstall this session is about to do is the first real opportunity to observe this directly.
+**Verified:** repinned CorpFlow's own checkout to `core-v0.8.2`/`adapter-corpflow-v0.8.2`, did a clean `rm -rf node_modules package-lock.json && npm install`, and confirmed both `node_modules/@aria/core/package.json` and `node_modules/@aria/adapter-corpflow/package.json` have the correct package `name` (not `"aria"`) and that `require.resolve('@aria/adapter-corpflow')` and `require.resolve('@aria/core')` both succeed and point at real `dist/` files.
 
-**Blocking:** Not confirmed as blocking yet — treat as a caution flag on the imminent CorpFlow repin/reinstall, not a hard stop, until that install either reproduces or rules this out.
+**Likelihood:** Was High — 100% reproducible for any real external consumer of `v0.8.0`/`v0.8.1`.
+**Impact:** Was Critical (broke all real external consumption of both packages) — now Resolved for `v0.8.2` onward.
+
+**Action:** Done — see Fix/Verified above. Process gap worth closing separately: nothing currently *checks* that a cut tag was actually subtree-split before it's pushed — the verification memory's standalone-build step should be extended to include a `require.resolve` (or equivalent real-import) smoke test, not just "build succeeds," and ideally a pre-push assertion that a package's tag tree doesn't contain files outside that package's own directory (e.g. no `RISK-REGISTER.md`/`docs/` at tag root). Not filed as its own risk-register entry — this is tooling/process hardening, tracked here as a follow-up note instead.
+
+**Blocking:** No longer blocking — resolved via `v0.8.2`.
 
 ---
 
