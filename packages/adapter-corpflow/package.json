@@ -1,6 +1,6 @@
 {
   "name": "@aria/adapter-corpflow",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "private": true,
   "type": "module",
   "main": "./dist/index.cjs",
@@ -25,7 +25,7 @@
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "@aria/core": "github:twalibey/aria-core#core-v0.8.3",
+    "@aria/core": "github:twalibey/aria-core#core-v0.8.4",
     "drizzle-orm": "^0.45.1"
   },
   "peerDependencies": {
