@@ -18,15 +18,13 @@ export class InMemoryAgentActionStore implements AgentActionStore {
     const key = `${params.sourceType}:${params.sourceId}:${params.agentId}`;
     const existingActionId = this.claimIndex.get(key);
     if (existingActionId) {
-      const existingAction = this.actions.get(existingActionId);
-      if (existingAction && existingAction.status !== 'needs_attention' && existingAction.attemptCount > 0) {
-        // Allow re-claiming for retry scenarios (when attemptCount > 0), but
-        // never a row that has already terminally escalated to
-        // needs_attention — that would re-process it forever.
-        return existingAction;
-      }
-      // Concurrent claim attempt (attemptCount == 0), or a terminal
-      // needs_attention row, not allowed to be (re-)claimed.
+      // True insert-or-null: claim() only ever creates a genuinely new row
+      // for this (sourceType, sourceId, agentId) triple. Any existing row —
+      // regardless of its status or attemptCount — means this is not a fresh
+      // claim, so return null. Retrying a failed row is reclaimForRetry's
+      // job, not claim()'s; this mirrors the real Drizzle-backed store, whose
+      // claim() relies on a UNIQUE constraint and always returns null on any
+      // conflict.
       return null;
     }
 

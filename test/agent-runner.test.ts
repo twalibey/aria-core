@@ -154,7 +154,7 @@ describe('AgentRunner.run', () => {
       sourceType: 'test_source',
       sourceId: 'sub-1',
     });
-    await store.update(claimed!.id, { attemptCount: 2 });
+    await store.update(claimed!.id, { status: 'draft_failed', attemptCount: 2 });
 
     const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
 
@@ -203,17 +203,19 @@ describe('AgentRunner.run', () => {
     const runner = new AgentRunner(llm, registry, store, undefined, 3);
     const definition = makeDefinition();
 
-    // Simulate the cron job's own re-claim-by-id retry: directly bump
-    // attemptCount to 2 on the store before the 3rd run, matching what a
-    // real retry loop looks like from the store's perspective. AgentRunner
-    // itself only ever increments by 1 per call.
+    // Simulate the cron job's own re-claim-by-id retry: directly set the row
+    // to draft_failed with attemptCount 2 before the 3rd run, matching the
+    // shape a real Drizzle store would have at this point in the scenario
+    // (claim() is a true insert-or-null now, so a retried row is always
+    // draft_failed, never left at processing). AgentRunner itself only ever
+    // increments by 1 per call.
     const claimed = await store.claim({
       tenantId: 'tenant-1',
       agentId: 'test-agent',
       sourceType: 'test_source',
       sourceId: 'sub-1',
     });
-    await store.update(claimed!.id, { attemptCount: 2 });
+    await store.update(claimed!.id, { status: 'draft_failed', attemptCount: 2 });
 
     const result = await runner.run(definition, { donorName: 'Ada', amount: 10 }, 'tenant-1', 'sub-1');
 
@@ -282,6 +284,7 @@ describe('AgentRunner.run', () => {
     // check, independent of whether the store gates correctly.
     const laxStore: AgentActionStore = {
       claim: async () => needsAttentionAction,
+      reclaimForRetry: async () => null,
       update: async () => needsAttentionAction,
       get: async () => needsAttentionAction,
     };
