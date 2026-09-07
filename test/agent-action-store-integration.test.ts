@@ -58,7 +58,11 @@ describe('createDrizzleAgentActionStore.reclaimForRetry (real end-to-end)', () =
     expect(sql.toLowerCase()).toContain('update');
     expect(sql.toLowerCase()).toContain('"agent_actions"');
     expect(sql).toContain('"status" = $1');
-    // draft_failed is bound as a parameter, never inlined into the SQL string.
+    // This matches the compiled UPDATE's SET clause (status is set to the new
+    // 'processing' value via a bound param, never inlined) — it does not by
+    // itself prove anything about the WHERE predicate. The WHERE-side check
+    // that draft_failed is bound as a parameter is the `params` assertion
+    // below (`expect(params).toContain('draft_failed')`).
     expect(sql.toLowerCase()).toContain('attempt_count');
     // Pin the exact comparison operator against the attempt cap. This stub
     // driver never evaluates the WHERE predicate (it just echoes back
