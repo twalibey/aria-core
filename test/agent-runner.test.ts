@@ -2,8 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { AgentRunner } from '../src/agent-runner';
 import { InMemoryAgentActionStore } from '../src/agent-action-store-in-memory';
 import { ToolRegistry } from '../src/tools';
+import { SecurityAuditLog } from '../src/security-audit-log';
 import type { AgentAction, AgentActionStore, AgentDefinition, AgentDraftOutput } from '../src/agent-types';
 import type { LLMProvider } from '../src/types';
+
+// securityAuditLog is a mandatory ToolRegistry constructor argument. AgentRunner
+// always supplies a TenantContext to every toolRegistry.execute() call (see
+// agent-runner.ts), so these tests exercise the default tenantScoped: true
+// path and never trip the missing-tenant-context check — a no-op store is
+// fine here since no test in this file asserts on audit-log behavior.
+const testAuditLog = new SecurityAuditLog({
+  store: async () => {},
+  onCriticalViolation: async () => {},
+});
 
 interface FakeInput {
   donorName: string;
@@ -43,7 +54,7 @@ describe('AgentRunner.run', () => {
   it('skips entirely when autonomy is off, making no LLM call', async () => {
     const llm = makeLLM('{"draftContent":"hi","sourceSnapshot":{}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition({ checkAutonomy: async () => 'off' });
 
@@ -57,7 +68,7 @@ describe('AgentRunner.run', () => {
     const llm = makeLLM('{"draftContent":"hi","sourceSnapshot":{}}');
     const store = new InMemoryAgentActionStore();
     await store.claim({ tenantId: 'tenant-1', agentId: 'test-agent', sourceType: 'test_source', sourceId: 'sub-1' });
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -69,7 +80,7 @@ describe('AgentRunner.run', () => {
   it('writes a pending_confirm action on a successful draft when autonomy is confirm', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -83,7 +94,7 @@ describe('AgentRunner.run', () => {
   it('sets draft_failed and increments attemptCount when the LLM call throws, below the retry cap', async () => {
     const llm = makeLLM(new Error('LLM timeout'));
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const onError = vi.fn();
     const runner = new AgentRunner(llm, registry, store, onError);
     const definition = makeDefinition();
@@ -100,7 +111,7 @@ describe('AgentRunner.run', () => {
   it('sets draft_failed when parseOutput throws on malformed JSON', async () => {
     const llm = makeLLM('not valid json at all');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -112,7 +123,7 @@ describe('AgentRunner.run', () => {
   it('sets draft_failed when enrichSnapshot throws, exactly like a parseOutput throw', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition({
       enrichSnapshot: () => {
@@ -129,7 +140,7 @@ describe('AgentRunner.run', () => {
   it('escalates enrichSnapshot failures to needs_attention once attemptCount reaches maxAttempts', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store, undefined, 3);
     const definition = makeDefinition({
       enrichSnapshot: () => {
@@ -154,7 +165,7 @@ describe('AgentRunner.run', () => {
   it('uses enrichSnapshot\'s return value as the persisted sourceSnapshot when autonomy is confirm', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition({
       enrichSnapshot: (input, draft) => ({ ...draft.sourceSnapshot, donorName: input.donorName }),
@@ -169,7 +180,7 @@ describe('AgentRunner.run', () => {
   it('leaves sourceSnapshot exactly as parsed when enrichSnapshot is absent (backward compatibility)', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     // No enrichSnapshot on this definition. If it were ever invoked despite
     // being absent, there is no hook to invoke — this test instead proves
@@ -188,7 +199,7 @@ describe('AgentRunner.run', () => {
   it('escalates to needs_attention once attemptCount reaches maxAttempts', async () => {
     const llm = makeLLM(new Error('LLM timeout'));
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store, undefined, 3);
     const definition = makeDefinition();
 
@@ -213,7 +224,7 @@ describe('AgentRunner.run', () => {
   it('does not reprocess a row already at needs_attention status: no further LLM call, no infinite retry', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -247,7 +258,7 @@ describe('AgentRunner.run', () => {
 
   it('AgentRunner defense-in-depth: if a store implementation ever (re-)returns a needs_attention row from claim(), run() still refuses to call the LLM and returns needs_attention immediately', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const definition = makeDefinition();
 
     const needsAttentionAction: AgentAction = {
@@ -297,7 +308,7 @@ describe('AgentRunner.run', () => {
     // at the DB level, only at this application-level claim contract.
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -313,7 +324,7 @@ describe('AgentRunner.run', () => {
   it('executes the tool and writes auto_sent when autonomy is auto and the tool succeeds', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     registry.register({
       definition: {
         name: 'send-test-action',
@@ -334,7 +345,7 @@ describe('AgentRunner.run', () => {
   it('uses enrichSnapshot\'s return value as the persisted sourceSnapshot when autonomy is auto', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     registry.register({
       definition: {
         name: 'send-test-action',
@@ -358,7 +369,7 @@ describe('AgentRunner.run', () => {
   it('writes send_failed when autonomy is auto and the tool execution fails', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     registry.register({
       definition: {
         name: 'send-test-action',
@@ -383,7 +394,7 @@ describe('AgentRunner.run', () => {
 describe('AgentRunner.run — buildDraft path', () => {
   it('uses buildDraft directly and never calls the LLM when buildDraft is present', async () => {
     const llmProvider: LLMProvider = { call: vi.fn().mockRejectedValue(new Error('LLM should not be called')) };
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(undefined, testAuditLog);
     const store = new InMemoryAgentActionStore();
     const runner = new AgentRunner(llmProvider, toolRegistry, store);
 
@@ -423,7 +434,7 @@ describe('AgentRunner.run — buildDraft path', () => {
     // from Task 7, whose claim() relies on a real UNIQUE constraint and
     // always returns null on conflict, regardless of attemptCount).
     const llmProvider: LLMProvider = { call: vi.fn() };
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(undefined, testAuditLog);
 
     const existingAction: AgentAction = {
       id: 'action-1',
@@ -488,7 +499,7 @@ describe('AgentRunner.run — buildDraft path', () => {
 
   it('returns skipped_already_claimed when the row exists and is not reclaimable (e.g. still processing)', async () => {
     const llmProvider: LLMProvider = { call: vi.fn() };
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(undefined, testAuditLog);
     const store = new InMemoryAgentActionStore();
     const runner = new AgentRunner(llmProvider, toolRegistry, store);
 
@@ -521,7 +532,7 @@ describe('AgentRunner.run — buildDraft path', () => {
     const llmProvider: LLMProvider = {
       call: vi.fn().mockResolvedValue({ content: '{"draftContent":"llm text","sourceSnapshot":{}}' }),
     };
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(undefined, testAuditLog);
     const store = new InMemoryAgentActionStore();
     const runner = new AgentRunner(llmProvider, toolRegistry, store);
 
@@ -546,7 +557,7 @@ describe('AgentRunner.confirmAndExecute', () => {
   it('executes the tool with the original draft content and marks the action sent', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     let capturedArgs: unknown;
     registry.register({
       definition: {
@@ -573,7 +584,7 @@ describe('AgentRunner.confirmAndExecute', () => {
   it('uses editedContent in place of the original draft when provided, and marks edited_and_sent', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     let capturedArgs: unknown;
     registry.register({
       definition: {
@@ -601,7 +612,7 @@ describe('AgentRunner.confirmAndExecute', () => {
   it('marks send_failed (not thrown) when the tool execution fails during confirm', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     registry.register({
       definition: {
         name: 'send-test-action',
@@ -624,7 +635,7 @@ describe('AgentRunner.confirmAndExecute', () => {
   it('throws if the actionId does not exist', async () => {
     const llm = makeLLM('{}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
@@ -636,7 +647,7 @@ describe('AgentRunner.confirmAndExecute', () => {
   it('throws the identical "AgentAction not found" error (not a distinct message) when the action exists but belongs to a different tenant, and never executes the tool or updates the action', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     registry.register({
       definition: {
         name: 'send-test-action',
@@ -670,7 +681,7 @@ describe('AgentRunner.reject', () => {
   it('marks the action rejected without executing the tool', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const executeSpy = vi.spyOn(registry, 'execute');
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
@@ -685,7 +696,7 @@ describe('AgentRunner.reject', () => {
   it('throws the identical "AgentAction not found" error (not a distinct message) when the action exists but belongs to a different tenant, and leaves its status unchanged', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
     const store = new InMemoryAgentActionStore();
-    const registry = new ToolRegistry();
+    const registry = new ToolRegistry(undefined, testAuditLog);
     const runner = new AgentRunner(llm, registry, store);
     const definition = makeDefinition();
 
