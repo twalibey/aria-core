@@ -160,6 +160,25 @@
 
 ---
 
+## RISK-011: `InMemoryAgentActionStore.claim()` conflates claim-vs-retry semantics, making `AgentRunner.run()`'s reclaim fallback unreachable against it
+
+**Status:** Open
+**Filed:** 2026-09-06
+**Source:** Task reviewer, Task 2 of the CorpFlow automation-builder plan (subagent-driven-development execution)
+
+**Description:** `InMemoryAgentActionStore.claim()` returns an existing row directly (instead of `null`) whenever `status !== 'needs_attention' && attemptCount > 0` — a condition every `draft_failed` row satisfies, since `handleDraftFailure` always increments `attemptCount` to at least 1 before setting that status. `AgentRunner.run()`'s new reclaim fallback (added this same task) only calls `reclaimForRetry` when `claim()` returns `null`, and `reclaimForRetry` only succeeds on a `draft_failed` row — two conditions that can never both hold against this store. The fallback is therefore unreachable/dead code against `InMemoryAgentActionStore` in any organic `run()` sequence; it is only proven correct via a hand-rolled fake store in Task 2's own unit test, not any real store.
+
+**Not a production risk today:** the real `createDrizzleAgentActionStore.claim()` uses `onConflictDoNothing`, a true insert-or-null semantic that returns `null` for any existing row regardless of status — so CorpFlow's actual trigger-detection path (and its real-Postgres retry-sweep test) correctly exercises the fallback. This is a reference-implementation/test-coverage gap in `@aria/core`'s own in-memory store, not a live bug.
+
+**Likelihood:** Low impact today (no production consumer affected); the gap persists as long as `InMemoryAgentActionStore` is used to test any future `reclaimForRetry`-dependent behavior.
+**Impact:** Low (coverage gap only) today; would become Medium if a future adapter modeled its own claim() on this store's leniency instead of a true insert-or-null semantic, repeating the same unreachable-fallback shape in a real store.
+
+**Action:** Change `InMemoryAgentActionStore.claim()` to true insert-or-null semantics (return `null` for any existing row, regardless of status/attemptCount), moving all retry-allowance logic exclusively into `reclaimForRetry`. Audit existing consumers (e.g. `@aria/adapter-example`'s tests) for any reliance on the current lenient behavior before making this change, since its blast radius on pre-existing tests is unaudited.
+
+**Blocking:** Not blocking the CorpFlow automation-builder plan — parked during Task 2's review rather than reopening already-merged Task 1 work.
+
+---
+
 ## Standing Process Rules
 
 Cross-pillar process requirements, distinct from the numbered security/compliance risks above — apply to every future pillar, not just the one that surfaced them.
