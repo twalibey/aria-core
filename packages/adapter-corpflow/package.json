@@ -20,7 +20,7 @@
   },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\"",
-    "prepare": "npm run build"
+    "prepare": "npm run build --prefix ../core && npm run build"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
