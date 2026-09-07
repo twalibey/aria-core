@@ -8,15 +8,17 @@ The universal ARIA engine — personality, chat orchestration, rate limiting, to
 
 Tool handlers must derive all data scope from the `userId` parameter (and, in tenant-scoped mode, the `tenant: TenantContext` parameter) they're called with — never from a field inside `args`, even if a future tool schema is tempted to add one.
 
-### Tenant-scoped mode is opt-in via `SecurityAuditLog`, not a separate flag
+### `securityAuditLog` is required; `tenantScoped` is the actual on/off switch for enforcement
 
-`ToolRegistry` has no separate boolean for "tenant-scoped mode." Passing a `SecurityAuditLog` instance as its constructor's second argument turns tenant-scoping enforcement **on**: `execute()` then requires a `TenantContext` on every call (failing the call and logging a `missing_tenant_context` violation if one is missing), and strips-and-logs any LLM-supplied tenant-identity field in `args` (see below). **Omitting `securityAuditLog` silently turns all of this off** — `execute()` will happily run without a `TenantContext` at all. This is a deliberate design choice (opt-in via the audit log, not a redundant boolean you could set inconsistently with it) — not a bug — but it means a consumer building a multi-tenant integration must remember to construct and pass a `SecurityAuditLog` before relying on any tenant enforcement; there is no warning or error if it's left out.
+`ToolRegistry`'s constructor is `(onToolError: ToolErrorHook | undefined, securityAuditLog: SecurityAuditLog, tenantScoped: boolean = true)`. `securityAuditLog` is a **required** parameter — omitting it is a compile-time error, not a silent runtime default; there is no way to construct a `ToolRegistry` without a real `SecurityAuditLog` instance.
+
+Tenant-scoping enforcement is controlled by the third constructor argument, `tenantScoped` (default `true`) — not by whether `securityAuditLog` was supplied. When `tenantScoped` is `true`, `execute()` requires a `TenantContext` on every call (failing the call and logging a `missing_tenant_context` violation if one is missing), and strips-and-logs any LLM-supplied tenant-identity field in `args` (see below). A non-tenant consumer (e.g. My Body / `adapter-fitness`) should pass `tenantScoped: false` explicitly to disable this enforcement, rather than relying on any implicit behavior — `securityAuditLog` must still be provided either way, since it's required regardless of `tenantScoped`.
 
 When tenant-scoped mode is on, `ToolRegistry.execute()` also strips any of the known tenant-identity spellings (`tenantId`, `tenant_id`) an LLM-calling tool tries to pass in `args`, logging an `llm_supplied_tenant_id` violation each time, rather than trusting it — the real tenant always comes from the `TenantContext` parameter, never from the tool call arguments.
 
 ### Breaking change in `v0.8.0`: `ToolRegistry`'s `securityAuditLog` constructor argument is now required
 
-`ToolRegistry`'s second constructor argument, `securityAuditLog`, was previously optional; as of `v0.8.0` it is a required parameter. Every consumer must now pass a real `SecurityAuditLog` instance — there is no longer a silent "tenant-scoping off" default reachable by simply omitting the argument. See "Tenant-scoped mode is opt-in via `SecurityAuditLog`, not a separate flag" above for what that argument controls.
+`ToolRegistry`'s second constructor argument, `securityAuditLog`, was previously optional; as of `v0.8.0` it is a required parameter. Every consumer must now pass a real `SecurityAuditLog` instance — there is no longer a silent "tenant-scoping off" default reachable by simply omitting the argument. Tenant-scoping enforcement itself is a separate, later-added `tenantScoped` constructor argument (default `true`) — see "`securityAuditLog` is required; `tenantScoped` is the actual on/off switch for enforcement" above.
 
 ### New in `v0.8.0`: `AutomationDescriptorValidator`
 
