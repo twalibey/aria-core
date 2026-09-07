@@ -1,6 +1,6 @@
 {
   "name": "@aria/adapter-corpflow",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "type": "module",
   "main": "./dist/index.cjs",
@@ -20,12 +20,12 @@
   },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly && node -e \"require('node:fs').copyFileSync('dist/index.d.ts','dist/index.d.cts')\"",
-    "prepare": "npm run build --prefix ../core && npm run build"
+    "prepare": "npm run build"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "@aria/core": "*",
+    "@aria/core": "github:twalibey/aria-core#core-v0.8.3",
     "drizzle-orm": "^0.45.1"
   },
   "peerDependencies": {
