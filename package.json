@@ -5,6 +5,7 @@
     "packages/*"
   ],
   "scripts": {
+    "prebuild": "npm run build --workspace=packages/core",
     "build": "npm run build --workspaces --if-present",
     "pretest": "npm run build --workspace=packages/core",
     "test": "vitest run",
