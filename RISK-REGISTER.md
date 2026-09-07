@@ -220,11 +220,13 @@ Confirmed reproducible in a disposable throwaway clone, deleted after diagnosis.
 
 **Blocking:** No longer blocking — real external git-tag consumption (CorpFlow) is unblocked as of commit `e17f46f`. See RISK-013 for the separate, still-open final-placement concern this verification surfaced.
 
+**Correction (2026-09-07):** The `--prefix ../core` fix above was verified against `v0.8.1`, a tag that (per RISK-013) was never actually subtree-split — it still had the full monorepo present, so `../core` genuinely existed as a sibling. Once `v0.8.2` was properly subtree-split (RISK-013's real fix), that sibling directory stopped existing at all, and this fix's own `prepare` script would have failed on a real install. Reverted in the `v0.8.3` cut to plain `"prepare": "npm run build"`, with `adapter-corpflow`'s `@aria/core` devDependency pinned to the real `core-v0.8.3` tag (matching this project's original, proven `v0.4.0`-`v0.7.0` convention) — `@aria/core`'s own git-tag install builds itself via its own `prepare` before landing in `node_modules`, so no cross-package build step is needed inside `adapter-corpflow`'s own `prepare` at all. This diagnosis-was-real-but-the-fix-assumed-a-broken-context pattern is exactly why RISK-013's own Action item calls for a `require.resolve` smoke test on every future tag cut, not just a build check.
+
 ---
 
 ## RISK-013: `core-v0.8.0`/`adapter-corpflow-v0.8.0` (and the `v0.8.1` hotfix) were never subtree-split — both are non-functional for real external consumption
 
-**Status:** Resolved (2026-09-07), superseded by properly subtree-split `v0.8.2` tags
+**Status:** Resolved (2026-09-07), superseded by `v0.8.3` (`v0.8.2` was the first properly subtree-split cut but itself shipped a second, related defect — see Correction below)
 **Filed:** 2026-09-07
 **Source:** Verifying RISK-012's fix end-to-end: a real `npm install` of `@aria/adapter-corpflow`/`@aria/core` against the pushed `github:twalibey/aria-core#adapter-corpflow-v0.8.1`/`#core-v0.8.1` tags into CorpFlow's own checkout, followed by `node -e "require.resolve('@aria/adapter-corpflow')"`.
 
@@ -234,14 +236,16 @@ Confirmed reproducible in a disposable throwaway clone, deleted after diagnosis.
 
 **Fix:** Re-did the release correctly as `v0.8.2` — real `git subtree split --prefix=packages/core` / `--prefix=packages/adapter-corpflow`, `git branch -f release-core`/`release-adapter-corpflow` re-pointed at the new split commits, tagged from those branches (not the monorepo commit). `v0.8.0` and `v0.8.1` are left in place, undeleted (already pushed, per this project's own convention against rewriting a published tag), but are now documented here as **non-functional for real external consumption** — do not point any consumer at either.
 
-**Verified:** repinned CorpFlow's own checkout to `core-v0.8.2`/`adapter-corpflow-v0.8.2`, did a clean `rm -rf node_modules package-lock.json && npm install`, and confirmed both `node_modules/@aria/core/package.json` and `node_modules/@aria/adapter-corpflow/package.json` have the correct package `name` (not `"aria"`) and that `require.resolve('@aria/adapter-corpflow')` and `require.resolve('@aria/core')` both succeed and point at real `dist/` files.
+**Correction — `v0.8.2` itself did not actually verify clean:** repinning CorpFlow to `core-v0.8.2`/`adapter-corpflow-v0.8.2` and running a clean `rm -rf node_modules package-lock.json && npm install` failed outright with `npm error 404 Not Found - GET https://registry.npmjs.org/@aria%2fcore` — a second, real defect this subtree-split fix exposed (see the Correction on RISK-012 above): `adapter-corpflow`'s `@aria/core` devDependency was still `"*"` (set in Task 7 before any real tag existed) and its `prepare` script still referenced a `../core` sibling that no longer exists once properly subtree-split. Both fixed in `v0.8.3`.
+
+**Verified (against `v0.8.3`):** (1) a standalone clone of the `release-adapter-corpflow` branch alone, `npm install` + `require.resolve('@aria/adapter-corpflow')` + `require.resolve('@aria/core')` + a real `require('@aria/adapter-corpflow')` returning its actual exports (`createDrizzleAgentActionStore`, `createDrizzleQueryPlanRunner`, etc.) — all succeeded. (2) Repinned CorpFlow's own checkout to `core-v0.8.3`/`adapter-corpflow-v0.8.3`, clean `rm -rf node_modules package-lock.json && npm install`, confirmed both `node_modules/@aria/core/package.json` and `node_modules/@aria/adapter-corpflow/package.json` have the correct package `name` (not `"aria"`) and that `require.resolve(...)` for both, plus a real `require('@aria/adapter-corpflow')`, succeed and return real exports.
 
 **Likelihood:** Was High — 100% reproducible for any real external consumer of `v0.8.0`/`v0.8.1`.
-**Impact:** Was Critical (broke all real external consumption of both packages) — now Resolved for `v0.8.2` onward.
+**Impact:** Was Critical (broke all real external consumption of both packages) — now Resolved as of `v0.8.3` (`v0.8.2` fixed the subtree-split shape but was itself unable to complete a real `npm install`, per the Correction above).
 
-**Action:** Done — see Fix/Verified above. Process gap worth closing separately: nothing currently *checks* that a cut tag was actually subtree-split before it's pushed — the verification memory's standalone-build step should be extended to include a `require.resolve` (or equivalent real-import) smoke test, not just "build succeeds," and ideally a pre-push assertion that a package's tag tree doesn't contain files outside that package's own directory (e.g. no `RISK-REGISTER.md`/`docs/` at tag root). Not filed as its own risk-register entry — this is tooling/process hardening, tracked here as a follow-up note instead.
+**Action:** Done — see Fix/Verified above. Process gap worth closing separately: nothing currently *checks* that a cut tag was actually subtree-split, or that its dependency pins/lifecycle scripts are valid outside a monorepo context, before it's pushed — the verification memory's standalone-build step should be extended to include a `require.resolve` (or equivalent real-import) smoke test against a truly standalone clone of just the release branch, not just "build succeeds inside the monorepo" or "npm install completes." Not filed as its own risk-register entry — this is tooling/process hardening, tracked here as a follow-up note instead.
 
-**Blocking:** No longer blocking — resolved via `v0.8.2`.
+**Blocking:** No longer blocking — resolved via `v0.8.3`, verified end to end against both a standalone clone and the real CorpFlow consumer.
 
 ---
 
