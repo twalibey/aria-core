@@ -158,6 +158,8 @@
 
 **Blocking:** Blocking for Pillar 4's new approve/reject-equivalent route — must be fixed before or alongside that route's construction, not deferred past it.
 
+**Update (2026-09-06):** Core-side fix landed in `@aria/core` commit `3a10d50` (required `securityAuditLog` + explicit `tenantScoped` flag); status stays Open until Task 7's version bump/repin lands so CorpFlow's actual runtime picks it up.
+
 ---
 
 ## RISK-011: `InMemoryAgentActionStore.claim()` conflates claim-vs-retry semantics, making `AgentRunner.run()`'s reclaim fallback unreachable against it

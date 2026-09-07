@@ -239,3 +239,19 @@ describe('ToolRegistry tenant-scoped mode', () => {
     );
   });
 });
+
+describe('ToolRegistry — securityAuditLog stays a required constructor argument (compile-time regression guard)', () => {
+  it('fails to compile without a securityAuditLog, with or without onToolError', () => {
+    // Type-level regression guard for RISK-009: if someone reverts the `?`
+    // this task removed and makes securityAuditLog optional again, these
+    // `@ts-expect-error` directives themselves become type errors (an
+    // "unused '@ts-expect-error' directive" error), which `npm run
+    // typecheck` (vitest --typecheck.only) already runs and enforces. This
+    // is a compile-time-only assertion — nothing here needs to run or be
+    // awaited.
+    // @ts-expect-error securityAuditLog is a required constructor argument.
+    new ToolRegistry();
+    // @ts-expect-error securityAuditLog is required even when onToolError is supplied.
+    new ToolRegistry(undefined);
+  });
+});

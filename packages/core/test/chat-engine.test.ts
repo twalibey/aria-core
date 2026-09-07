@@ -21,10 +21,12 @@ import type { AriaMemoryStore, AriaMemoryEntry } from '../src/types';
 
 // securityAuditLog is a mandatory ToolRegistry constructor argument. This
 // suite exercises ChatEngine as a tenant-agnostic engine (most tests never
-// pass a TenantContext to sendMessage), so its registries are constructed
-// with tenantScoped: false — a conscious, explicit opt-out, not a silent
-// omission. A no-op store is fine since no test here asserts on audit-log
-// behavior.
+// pass a TenantContext to sendMessage), so buildEngine() defaults its
+// registry to tenantScoped: false — a conscious, explicit opt-out, not a
+// silent omission. The one test that does pass a TenantContext ("threads an
+// optional TenantContext through to tool execution") overrides this back to
+// tenantScoped: true, since that's the specific behavior it's testing. A
+// no-op store is fine since no test here asserts on audit-log behavior.
 const testAuditLog = new SecurityAuditLog({
   store: async () => {},
   onCriticalViolation: async () => {},
@@ -75,11 +77,12 @@ function buildEngine(
     guardrails?: GuardrailFilter;
     sentiment?: SentimentDetector;
     memory?: MemoryManager;
+    tenantScoped?: boolean;
   } = {}
 ) {
   const historyStore = new InMemoryHistoryStore();
   const rateLimiter = new RateLimiter(historyStore, { freeLimit: overrides.freeLimit ?? 3 });
-  const toolRegistry = new ToolRegistry(undefined, testAuditLog, false);
+  const toolRegistry = new ToolRegistry(undefined, testAuditLog, overrides.tenantScoped ?? false);
   const fallbackEngine = new FallbackEngine([], 'Fallback response');
   const engine = new ChatEngine({
     contextProvider: makeContextProvider({ name: 'Sam' }),
@@ -246,6 +249,7 @@ describe('ChatEngine.sendMessage', () => {
 
   it('threads an optional TenantContext through to tool execution', async () => {
     const { engine, toolRegistry } = buildEngine({
+      tenantScoped: true,
       llmProvider: makeStubProvider([
         { content: '', toolCalls: [{ name: 'echo_tenant', arguments: {} }] },
         { content: 'done' },
