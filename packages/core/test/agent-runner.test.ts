@@ -380,6 +380,168 @@ describe('AgentRunner.run', () => {
   });
 });
 
+describe('AgentRunner.run — buildDraft path', () => {
+  it('uses buildDraft directly and never calls the LLM when buildDraft is present', async () => {
+    const llmProvider: LLMProvider = { call: vi.fn().mockRejectedValue(new Error('LLM should not be called')) };
+    const toolRegistry = new ToolRegistry();
+    const store = new InMemoryAgentActionStore();
+    const runner = new AgentRunner(llmProvider, toolRegistry, store);
+
+    const draft: AgentDraftOutput = { draftContent: 'Deterministic notification text', sourceSnapshot: {} };
+    const definition: AgentDefinition<{ caseId: string }> = {
+      id: 'automation:def1',
+      sourceType: 'case',
+      buildPrompt: () => {
+        throw new Error('buildPrompt should not be called when buildDraft is present');
+      },
+      parseOutput: () => {
+        throw new Error('parseOutput should not be called when buildDraft is present');
+      },
+      buildDraft: () => draft,
+      action: { name: 'notify_case_owner', description: 'notify', parameters: {} },
+      buildToolArgs: (d) => ({ text: d.draftContent }),
+      checkAutonomy: async () => 'confirm',
+    };
+
+    const result = await runner.run(definition, { caseId: 'c1' }, 't1', 'c1');
+
+    expect(llmProvider.call).not.toHaveBeenCalled();
+    expect(result.status).toBe('pending_confirm');
+    expect(result.action?.draftContent).toBe('Deterministic notification text');
+  });
+
+  it('falls back to reclaimForRetry when claim returns null, and re-drafts', async () => {
+    // Uses a hand-rolled store stand-in (like the existing "laxStore"
+    // defense-in-depth test above) rather than InMemoryAgentActionStore,
+    // because InMemoryAgentActionStore's own claim() already re-returns a
+    // draft_failed/attemptCount>0 row directly (see agent-action-store-in-memory.ts),
+    // so it never actually returns null for that scenario — run()'s
+    // reclaimForRetry fallback would never be exercised. This isolates and
+    // proves run() itself calls reclaimForRetry with the right params
+    // whenever claim() returns null, independent of any one store's
+    // internal claim() retry behavior (e.g. the future Drizzle-backed store
+    // from Task 7, whose claim() relies on a real UNIQUE constraint and
+    // always returns null on conflict, regardless of attemptCount).
+    const llmProvider: LLMProvider = { call: vi.fn() };
+    const toolRegistry = new ToolRegistry();
+
+    const existingAction: AgentAction = {
+      id: 'action-1',
+      tenantId: 't1',
+      agentId: 'automation:def1',
+      sourceType: 'case',
+      sourceId: 'c1',
+      status: 'draft_failed',
+      draftContent: 'old draft',
+      sourceSnapshot: {},
+      attemptCount: 1,
+      confirmedByUserId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const claimSpy = vi.fn().mockResolvedValue(null);
+    const reclaimSpy = vi.fn().mockResolvedValue({ ...existingAction, status: 'processing' });
+    const updateSpy = vi.fn().mockImplementation(async (id: string, patch: Partial<AgentAction>) => ({
+      ...existingAction,
+      ...patch,
+      id,
+    }));
+    const fakeStore: AgentActionStore = {
+      claim: claimSpy,
+      reclaimForRetry: reclaimSpy,
+      update: updateSpy,
+      get: vi.fn().mockResolvedValue(existingAction),
+    };
+
+    const runner = new AgentRunner(llmProvider, toolRegistry, fakeStore, undefined, 3);
+
+    const draft: AgentDraftOutput = { draftContent: 'retried draft', sourceSnapshot: {} };
+    const definition: AgentDefinition<{ caseId: string }> = {
+      id: 'automation:def1',
+      sourceType: 'case',
+      buildPrompt: () => {
+        throw new Error('unused');
+      },
+      parseOutput: () => {
+        throw new Error('unused');
+      },
+      buildDraft: () => draft,
+      action: { name: 'notify_case_owner', description: 'notify', parameters: {} },
+      buildToolArgs: (d) => ({ text: d.draftContent }),
+      checkAutonomy: async () => 'confirm',
+    };
+
+    const result = await runner.run(definition, { caseId: 'c1' }, 't1', 'c1');
+
+    expect(claimSpy).toHaveBeenCalledTimes(1);
+    expect(reclaimSpy).toHaveBeenCalledWith({
+      tenantId: 't1',
+      agentId: 'automation:def1',
+      sourceType: 'case',
+      sourceId: 'c1',
+      maxAttempts: 3,
+    });
+    expect(result.status).toBe('pending_confirm');
+    expect(result.action?.draftContent).toBe('retried draft');
+  });
+
+  it('returns skipped_already_claimed when the row exists and is not reclaimable (e.g. still processing)', async () => {
+    const llmProvider: LLMProvider = { call: vi.fn() };
+    const toolRegistry = new ToolRegistry();
+    const store = new InMemoryAgentActionStore();
+    const runner = new AgentRunner(llmProvider, toolRegistry, store);
+
+    const definition: AgentDefinition<{ caseId: string }> = {
+      id: 'automation:def1',
+      sourceType: 'case',
+      buildPrompt: () => {
+        throw new Error('unused');
+      },
+      parseOutput: () => {
+        throw new Error('unused');
+      },
+      buildDraft: () => ({ draftContent: 'x', sourceSnapshot: {} }),
+      action: { name: 'notify_case_owner', description: 'notify', parameters: {} },
+      buildToolArgs: (d) => ({ text: d.draftContent }),
+      checkAutonomy: async () => 'confirm',
+    };
+
+    // First run() succeeds and leaves the row at pending_confirm, not
+    // draft_failed — so it is not reclaimable.
+    const first = await runner.run(definition, { caseId: 'c2' }, 't1', 'c2');
+    expect(first.status).toBe('pending_confirm');
+
+    const second = await runner.run(definition, { caseId: 'c2' }, 't1', 'c2');
+
+    expect(second.status).toBe('skipped_already_claimed');
+  });
+
+  it('existing buildPrompt/parseOutput path is unaffected when buildDraft is absent', async () => {
+    const llmProvider: LLMProvider = {
+      call: vi.fn().mockResolvedValue({ content: '{"draftContent":"llm text","sourceSnapshot":{}}' }),
+    };
+    const toolRegistry = new ToolRegistry();
+    const store = new InMemoryAgentActionStore();
+    const runner = new AgentRunner(llmProvider, toolRegistry, store);
+
+    const definition: AgentDefinition<{ x: string }> = {
+      id: 'donor-response',
+      sourceType: 'donation',
+      buildPrompt: () => ({ systemPrompt: 'sys', userPrompt: 'user' }),
+      parseOutput: (raw) => JSON.parse(raw) as AgentDraftOutput,
+      action: { name: 'send-donor-followup', description: 'send', parameters: {} },
+      buildToolArgs: (d) => ({ text: d.draftContent }),
+      checkAutonomy: async () => 'confirm',
+    };
+
+    const result = await runner.run(definition, { x: 'y' }, 't1', 'd1');
+
+    expect(llmProvider.call).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe('pending_confirm');
+  });
+});
+
 describe('AgentRunner.confirmAndExecute', () => {
   it('executes the tool with the original draft content and marks the action sent', async () => {
     const llm = makeLLM('{"draftContent":"Thanks Ada!","sourceSnapshot":{"amount":10}}');
