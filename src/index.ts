@@ -26,6 +26,15 @@ export type { QuerySpecExecutorConfig } from './query-spec-executor.js';
 export { AgentRunner } from './agent-runner.js';
 export { InMemoryAgentActionStore } from './agent-action-store-in-memory.js';
 export { stripMarkdownFence } from './fence-parser.js';
+export {
+  AutomationDescriptorValidator,
+  AUTOMATION_SAFE_FAILURE_MESSAGE,
+} from './automation-descriptor-validator.js';
+export type {
+  AutomationWhitelistEntry,
+  ProposedAutomationDescriptor,
+  AutomationValidationResult,
+} from './automation-descriptor-validator.js';
 export type {
   AutonomyLevel,
   AgentActionStatus,
