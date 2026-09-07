@@ -1,4 +1,4 @@
-import { eq, type SQL } from 'drizzle-orm';
+import { and, eq, lt, type SQL } from 'drizzle-orm';
 import type { AgentAction, AgentActionStore } from '@aria/core';
 
 // Minimal shape of what this store needs from a Drizzle db instance — avoids
@@ -81,6 +81,31 @@ export function createDrizzleAgentActionStore(
           status: 'processing',
         })
         .onConflictDoNothing({ target: [table.sourceType, table.sourceId, table.agentId] })
+        .returning();
+
+      return rows.length > 0 ? rowToAction(rows[0]) : null;
+    },
+
+    async reclaimForRetry(params: {
+      tenantId: string;
+      agentId: string;
+      sourceType: string;
+      sourceId: string;
+      maxAttempts: number;
+    }): Promise<AgentAction | null> {
+      const rows = await db
+        .update(table)
+        .set({ status: 'processing', updatedAt: new Date() })
+        .where(
+          and(
+            eq(table.tenantId as any, params.tenantId),
+            eq(table.agentId as any, params.agentId),
+            eq(table.sourceType as any, params.sourceType),
+            eq(table.sourceId as any, params.sourceId),
+            eq(table.status as any, 'draft_failed'),
+            lt(table.attemptCount as any, params.maxAttempts)
+          )!
+        )
         .returning();
 
       return rows.length > 0 ? rowToAction(rows[0]) : null;
