@@ -222,6 +222,25 @@ Confirmed reproducible in a disposable throwaway clone, deleted after diagnosis.
 
 ---
 
+## RISK-013: A git-tag-installed workspace package may resolve to the whole monorepo root, not the matched package subdirectory
+
+**Status:** Open
+**Filed:** 2026-09-07
+**Source:** Verifying RISK-012's fix (a real `npm install` of `@aria/adapter-corpflow`/`@aria/core` against the pushed `github:twalibey/aria-core#adapter-corpflow-v0.8.0`/`#core-v0.8.0` tags into a scratch external consumer project).
+
+**Description:** Even after a git dependency's `prepare` script succeeds (RISK-012's fix), the content npm places under the consumer's `node_modules/@aria/adapter-corpflow` and `node_modules/@aria/core` for a workspace-declaring monorepo git-tag install appears to be the entire cloned repo root, not the matched workspace member's own subdirectory. If that holds under real `require`/`import` resolution, a real consumer's `import { ... } from '@aria/adapter-corpflow'` would not resolve the way `packages/adapter-corpflow/package.json`'s own `main`/`module`/`exports` fields intend, because npm never rewrote `node_modules/@aria/adapter-corpflow` to point at `packages/adapter-corpflow` specifically.
+
+Not yet confirmed against a real `require()`/`import` in running code — the observation so far is limited to inspecting what npm placed on disk after install. No CorpFlow code path imports these packages yet (Pillar 4's CorpFlow-side tasks, 8-15, have not started), so this has never been exercised end-to-end.
+
+**Likelihood:** Unknown — needs a real import-and-run test against the installed package, not just a directory listing, before this can be sized.
+**Impact:** Potentially Critical if confirmed (would break every real consumer import of either package installed via git tag, including CorpFlow's upcoming Part C work) — or a non-issue if npm's own module resolution correctly walks into the workspace subdirectory despite the on-disk layout looking like the whole repo.
+
+**Action:** Confirm or rule out with a real `import`/`require` smoke test (not just directory inspection) against a scratch consumer project before Part C (Tasks 8-15) starts relying on these imports for real — the CorpFlow repin/reinstall this session is about to do is the first real opportunity to observe this directly.
+
+**Blocking:** Not confirmed as blocking yet — treat as a caution flag on the imminent CorpFlow repin/reinstall, not a hard stop, until that install either reproduces or rules this out.
+
+---
+
 ## Standing Process Rules
 
 Cross-pillar process requirements, distinct from the numbered security/compliance risks above — apply to every future pillar, not just the one that surfaced them.
