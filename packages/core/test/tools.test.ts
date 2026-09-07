@@ -28,16 +28,27 @@ const throwingTool: Tool = {
   },
 };
 
+// Shared fixture for tests that don't care about audit-log call assertions —
+// securityAuditLog is now a mandatory constructor argument regardless of
+// whether a given ToolRegistry is tenant-scoped.
+function makeAuditLog() {
+  const store = vi.fn().mockResolvedValue(undefined);
+  const onCriticalViolation = vi.fn();
+  return { log: new SecurityAuditLog({ store, onCriticalViolation }), store, onCriticalViolation };
+}
+
 describe('ToolRegistry', () => {
   it('executes a registered tool with valid arguments', async () => {
-    const registry = new ToolRegistry();
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     registry.register(logWaterTool);
     const result = await registry.execute('u1', 'log_water', { cups: 2 });
     expect(result).toEqual({ success: true, result: 'Logged 2 cups for u1' });
   });
 
   it('rejects arguments that do not match the schema', async () => {
-    const registry = new ToolRegistry();
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     registry.register(logWaterTool);
     const result = await registry.execute('u1', 'log_water', { cups: 'two' });
     expect(result.success).toBe(false);
@@ -45,13 +56,15 @@ describe('ToolRegistry', () => {
   });
 
   it('returns a structured error for an unregistered tool name', async () => {
-    const registry = new ToolRegistry();
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     const result = await registry.execute('u1', 'does_not_exist', {});
     expect(result).toEqual({ success: false, error: 'Unknown tool: does_not_exist' });
   });
 
   it('catches a thrown handler error and returns it as a structured result', async () => {
-    const registry = new ToolRegistry();
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     registry.register(throwingTool);
     const result = await registry.execute('u1', 'always_throws', {});
     expect(result).toEqual({ success: false, error: 'boom' });
@@ -59,7 +72,8 @@ describe('ToolRegistry', () => {
 
   it('invokes the onToolError hook for every failure path', async () => {
     const onToolError = vi.fn();
-    const registry = new ToolRegistry(onToolError);
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(onToolError, log, false);
     registry.register(logWaterTool);
     registry.register(throwingTool);
 
@@ -71,7 +85,8 @@ describe('ToolRegistry', () => {
   });
 
   it('exposes tool definitions for passing to the LLM provider', () => {
-    const registry = new ToolRegistry();
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     registry.register(logWaterTool);
     expect(registry.getDefinitions()).toEqual([logWaterTool.definition]);
   });
@@ -91,12 +106,6 @@ describe('ToolRegistry tenant-scoped mode', () => {
     },
     handler: async (userId, args, tenant) => `record ${args.id} for tenant ${tenant?.tenantId}`,
   };
-
-  function makeAuditLog() {
-    const store = vi.fn().mockResolvedValue(undefined);
-    const onCriticalViolation = vi.fn();
-    return { log: new SecurityAuditLog({ store, onCriticalViolation }), store, onCriticalViolation };
-  }
 
   it('passes tenant context through to the handler', async () => {
     const { log } = makeAuditLog();
@@ -165,8 +174,9 @@ describe('ToolRegistry tenant-scoped mode', () => {
     );
   });
 
-  it('does not require tenant context when tenant-scoped mode is off (no SecurityAuditLog)', async () => {
-    const registry = new ToolRegistry();
+  it('does not require tenant context when tenant-scoped mode is off (tenantScoped: false)', async () => {
+    const { log } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log, false);
     registry.register(tenantTool);
     const result = await registry.execute('u1', 'get_record', { id: 'r1' });
     expect(result).toEqual({ success: true, result: 'record r1 for tenant undefined' });
@@ -205,5 +215,27 @@ describe('ToolRegistry tenant-scoped mode', () => {
 
     expect(result.success).toBe(false);
     expect(typeof result.error).toBe('string');
+  });
+
+  it('enforces tenant-context checks by default (tenantScoped defaults to true), not by the presence of securityAuditLog alone', async () => {
+    // Regression guard for RISK-009: before this task, the entire
+    // tenant-enforcement block lived inside `if (this.securityAuditLog)`, so
+    // simply passing a securityAuditLog was enough to opt in — there was no
+    // way to have audit logging without tenant enforcement, and no way to
+    // omit tenant enforcement other than by omitting the (then-optional)
+    // securityAuditLog, which also silently disabled audit logging. Now
+    // securityAuditLog is always mandatory, and tenant enforcement is a
+    // separate, explicit `tenantScoped` flag that defaults to `true` (secure
+    // by default) instead of being inferred from what was passed in.
+    const { log, store } = makeAuditLog();
+    const registry = new ToolRegistry(undefined, log);
+    registry.register(tenantTool);
+
+    const result = await registry.execute('u1', 'get_record', { id: 'r1' });
+
+    expect(result.success).toBe(false);
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'missing_tenant_context' })
+    );
   });
 });

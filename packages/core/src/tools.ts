@@ -21,8 +21,9 @@ export class ToolRegistry {
   private validators = new Map<string, ValidateFunction>();
 
   constructor(
-    private onToolError?: ToolErrorHook,
-    private securityAuditLog?: SecurityAuditLog
+    private onToolError: ToolErrorHook | undefined,
+    private securityAuditLog: SecurityAuditLog,
+    private tenantScoped: boolean = true
   ) {}
 
   register(tool: Tool<any>): void {
@@ -51,7 +52,7 @@ export class ToolRegistry {
       }
 
       let scopedArgs = args;
-      if (this.securityAuditLog) {
+      if (this.tenantScoped) {
         if (!tenant) {
           const error = `Tool "${toolName}" requires tenant context but none was provided`;
           await this.securityAuditLog.logViolation({

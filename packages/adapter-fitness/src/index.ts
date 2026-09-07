@@ -5,6 +5,7 @@ import {
   RateLimiter,
   ToolRegistry,
   FallbackEngine,
+  SecurityAuditLog,
 } from '@aria/core';
 import type { LLMProvider } from '@aria/core';
 import { FitnessContextProvider } from './context-provider';
@@ -62,12 +63,26 @@ function createInMemoryDataStore(): FitnessDataStore {
   };
 }
 
+// The fitness ("My Body") domain has no tenant concept — each user is their
+// own account, not a member of a tenant organization the way CorpFlow users
+// are. securityAuditLog is a mandatory ToolRegistry constructor argument
+// regardless, but tenant-context enforcement is explicitly opted out via
+// tenantScoped: false rather than achieved by omitting the audit log (which
+// is no longer possible, and wouldn't be the right way to express "no
+// tenants here" even if it were).
+function createNoOpSecurityAuditLog(): SecurityAuditLog {
+  return new SecurityAuditLog({
+    store: async () => {},
+    onCriticalViolation: async () => {},
+  });
+}
+
 export function buildFitnessChatEngine(deps: {
   llmProvider: LLMProvider;
   summarizerProvider?: LLMProvider;
 }): ChatEngine<FitnessContext> {
   const historyStore = new InMemoryHistoryStore();
-  const toolRegistry = new ToolRegistry();
+  const toolRegistry = new ToolRegistry(undefined, createNoOpSecurityAuditLog(), false);
   for (const tool of createFitnessTools(createInMemoryDataStore())) {
     toolRegistry.register(tool);
   }

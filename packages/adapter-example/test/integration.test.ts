@@ -5,15 +5,25 @@ import {
   RateLimiter,
   ToolRegistry,
   FallbackEngine,
+  SecurityAuditLog,
 } from '@aria/core';
 import type { LLMProvider } from '@aria/core';
 import { ExampleContextProvider, examplePromptConfig, checkInTool } from '../src';
+
+// securityAuditLog is a mandatory ToolRegistry constructor argument. These
+// tests never supply a TenantContext to sendMessage, so their registries are
+// explicitly non-tenant-scoped (tenantScoped: false) rather than tenant
+// enforcement being silently skipped.
+const testAuditLog = new SecurityAuditLog({
+  store: async () => {},
+  onCriticalViolation: async () => {},
+});
 
 describe('adapter-example end-to-end', () => {
   it('exercises every core interface through a full sendMessage call', async () => {
     const historyStore = new InMemoryHistoryStore();
     const contextProvider = new ExampleContextProvider();
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(undefined, testAuditLog, false);
     toolRegistry.register(checkInTool);
 
     let callCount = 0;
@@ -64,7 +74,7 @@ describe('adapter-example end-to-end', () => {
       historyStore,
       promptConfig: examplePromptConfig,
       llmProvider,
-      toolRegistry: new ToolRegistry(),
+      toolRegistry: new ToolRegistry(undefined, testAuditLog, false),
       fallbackEngine: new FallbackEngine([], 'fallback'),
       rateLimiter: new RateLimiter(historyStore, { freeLimit: 1 }),
     });

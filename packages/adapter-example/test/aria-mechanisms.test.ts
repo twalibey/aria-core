@@ -5,12 +5,22 @@ import {
   RateLimiter,
   ToolRegistry,
   FallbackEngine,
+  SecurityAuditLog,
 } from '@aria/core';
 import type { LLMProvider } from '@aria/core';
 import { ExampleContextProvider, examplePromptConfig } from '../src';
 import { exampleGuardrails } from '../src/guardrails-config';
 import { exampleSentiment } from '../src/sentiment-config';
 import { createExampleMemory } from '../src/memory-config';
+
+// securityAuditLog is a mandatory ToolRegistry constructor argument. These
+// tests never supply a TenantContext to sendMessage, so their registries are
+// explicitly non-tenant-scoped (tenantScoped: false) rather than tenant
+// enforcement being silently skipped.
+const testAuditLog = new SecurityAuditLog({
+  store: async () => {},
+  onCriticalViolation: async () => {},
+});
 
 describe('adapter-example — guardrails/sentiment/memory', () => {
   it('redirects an off-topic message using exampleGuardrails', async () => {
@@ -27,7 +37,7 @@ describe('adapter-example — guardrails/sentiment/memory', () => {
       historyStore,
       promptConfig: examplePromptConfig,
       llmProvider,
-      toolRegistry: new ToolRegistry(),
+      toolRegistry: new ToolRegistry(undefined, testAuditLog, false),
       fallbackEngine: new FallbackEngine([], 'fallback'),
       rateLimiter: new RateLimiter(historyStore, { freeLimit: 3 }),
       guardrails: exampleGuardrails,
@@ -53,7 +63,7 @@ describe('adapter-example — guardrails/sentiment/memory', () => {
       historyStore,
       promptConfig: examplePromptConfig,
       llmProvider,
-      toolRegistry: new ToolRegistry(),
+      toolRegistry: new ToolRegistry(undefined, testAuditLog, false),
       fallbackEngine: new FallbackEngine([], 'fallback'),
       rateLimiter: new RateLimiter(historyStore, { freeLimit: 3 }),
       sentiment: exampleSentiment,
